@@ -1,0 +1,62 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Runtime directories (created automatically at startup)
+input/*
+output/*
+!input/.gitkeep
+!output/.gitkeep
+
+# AI model weights, TensorRT engines, and cache metadata (downloaded/built at runtime)
+models/*
+!models/.gitkeep
+
+# Benchmark run logs
+bench_*.log
+bench_*.json
+benchmark_baseline*.log
+benchmark-results.json
+
+# ncnn/TensorRT tool installs (downloaded at runtime; packaging script stays tracked)
+tools/ncnn/
+tools/TensorRT/
+
+# TensorRT installer zip (kept locally, not committed)
+TensorRT-Enterprise-*.zip
+MultiPassDedupWeights.zip
+
+# MultiPassDedup weights inside source tree (runtime weights live in models/multipassdedup/)
+src/video_upscaler/multipass_dedup/weights/
+
+# Model hub staging directory (upload to HuggingFace, never commit)
+CLARITY_MODELS/
+
+# Internal dev workflow files (kept locally, not shipped)
+.superpowers/
+.planning/
+docs/superpowers/
+.opencode/
+graphify-out/
+revision-ref/*
+.agents/*
+CLARITY.md
+AGENTS.md
+MULTIPASSDEDUP_INTEGRATION_PLAN.md
+MATANYONE2_CLARITY_IMPLEMENTATION.md
+
+# Internal dev docs kept only on disk
+docs/*
+.cache/

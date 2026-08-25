@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clarity — Video AI</title>
+  <link rel="icon" type="image/jpeg" href="/static/clarity.jpg" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+
+  <!-- FULLSCREEN DRAG OVERLAY -->
+  <div id="drag-overlay">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#6EA4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem;"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
+    <div style="font-size: 1.5rem; font-weight: 700; color: #f8fafc;">Drop Video File Here</div>
+    <div style="font-size: 0.9rem; color: #94a3b8; margin-top: 0.5rem;">Release to upload and load directly into Clarity</div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container"></div>
+
+  <!-- TOP NAVIGATION HEADER -->
+  <header class="header">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2-5">
+        <img src="/static/clarity.jpg" alt="Clarity Logo" style="width: 2rem; height: 2rem; border-radius: 0.5rem; object-fit: cover; box-shadow: 0 0 12px var(--accent-glow);" />
+        <div class="flex items-center gap-1-5">
+          <span class="font-bold text-lg" style="letter-spacing: 0.05em;">CLARITY</span>
+          <span class="text-xs font-semibold rounded" style="background: rgba(110, 164, 191, 0.15); color: #6EA4BF; padding: 0.15rem 0.4rem; border: 1px solid rgba(110, 164, 191, 0.3);">VIDEO AI</span>
+        </div>
+      </div>
+
+      <div style="height: 1.25rem; width: 1px; background-color: var(--border-subtle); margin: 0 0.5rem;"></div>
+
+      <!-- TABS -->
+      <nav class="flex items-center gap-1" style="background: var(--bg-surface-2); padding: 0.25rem; border-radius: 0.5rem;">
+        <button id="tab-upscale" class="tab-btn active">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+          <span>Upscale</span>
+        </button>
+        <button id="tab-slowmo" class="tab-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+          <span>Slow-motion</span>
+        </button>
+        <button id="tab-dedup" class="tab-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg>
+          <span>Interpolate</span>
+        </button>
+        <button id="tab-matanyone" class="tab-btn" title="Easy Mask - Subject & Background Separation">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
+          <span>Easy Mask</span>
+        </button>
+      </nav>
+    </div>
+
+    <!-- RIGHT BADGE & RESET BUTTON -->
+    <div class="flex items-center gap-2">
+      <div id="system-info-badge" class="flex items-center gap-2" style="background: var(--bg-surface-2); border: 1px solid var(--border-subtle); padding: 0.35rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; color: #cbd5e1;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background-color: #10b981; display: inline-block;"></span>
+        <span id="backend-device-text">Auto Hardware</span>
+      </div>
+      <button id="btn-reset-app" class="btn-header-reset" type="button" title="Clear GPU VRAM cache and reset app state">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21h5v-5"/></svg>
+        <span>Reset App</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN AREA -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- HIDDEN GLOBAL FILE INPUT (OUTSIDE DROPZONE TO PREVENT EVENT BUBBLING) -->
+    <input type="file" id="file-input" style="display: none;" multiple accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.ts" />
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+
+      <!-- VIDEO INPUT SECTION -->
+      <div class="section">
+        <div class="flex items-center justify-between" style="margin-bottom: 0.6rem;">
+          <span class="section-title" style="margin-bottom: 0;">INPUT VIDEOS</span>
+          <button id="btn-refresh-videos" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px;" title="Refresh list">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+          </button>
+        </div>
+
+        <!-- DRAG AND DROP ZONE -->
+        <div id="dropzone" class="dropzone">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6EA4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 0.5rem;"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
+          <div id="dropzone-label" class="text-sm font-medium" style="color: #f1f5f9;">Drag &amp; Drop video files here</div>
+          <div id="dropzone-sub" class="text-xs" style="color: var(--text-muted); margin-top: 0.2rem;">or click to browse from device</div>
+          <div id="upload-progress-bar-container" class="hidden" style="width: 100%; margin-top: 0.75rem;">
+            <div style="width: 100%; height: 6px; background: var(--bg-surface-3); border-radius: 9999px; overflow: hidden;">
+              <div id="upload-progress-bar-fill" class="progress-shimmer" style="height: 100%; width: 50%;"></div>
+            </div>
+            <div id="upload-progress-text" class="text-xs font-mono" style="color: var(--accent); margin-top: 0.3rem; text-align: center;">Uploading video...</div>
+          </div>
+        </div>
+
+        <!-- VIDEO LIST -->
+        <div id="video-list" class="flex flex-col gap-2" style="margin-top: 0.75rem; max-height: 12rem; overflow-y: auto;">
+          <!-- Dynamically filled -->
+        </div>
+        <button id="btn-clear-videos" class="btn-clear-videos" type="button" title="Delete all videos in input folder">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          <span>Clear Videos</span>
+        </button>
+      </div>
+
+      <!-- CONFIGURATION SECTION -->
+      <div class="section flex-1">
+
+        <!-- UPSCALE PANEL -->
+        <div id="panel-upscale">
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">UPSCALE SCALE</label>
+            <div class="grid grid-cols-3 gap-2" style="margin-top: 0.4rem;">
+              <button type="button" data-scale="2" class="scale-btn active">2x</button>
+              <button type="button" data-scale="3" class="scale-btn">3x</button>
+              <button type="button" data-scale="4" class="scale-btn">4x</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">MODEL &amp; DENOISING</label>
+            <div id="profile-cards" class="flex flex-col gap-2" style="margin-top: 0.4rem;">
+              <!-- Dynamically filled -->
+            </div>
+          </div>
+        </div>
+
+        <!-- SLOW-MOTION PANEL -->
+        <div id="panel-slowmo" class="hidden">
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">SLOW-MOTION FACTOR</label>
+            <div class="grid grid-cols-3 gap-2" style="margin-top: 0.4rem;">
+              <button type="button" data-factor="2" class="slowmo-factor-btn scale-btn active">2x</button>
+              <button type="button" data-factor="4" class="slowmo-factor-btn scale-btn">4x</button>
+              <button type="button" data-factor="8" class="slowmo-factor-btn scale-btn">8x</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">AMT AI MODEL</label>
+            <div id="amt-model-cards" class="flex flex-col gap-2" style="margin-top: 0.4rem;">
+              <!-- Dynamically filled with AMT-S, AMT-M, AMT-L -->
+            </div>
+          </div>
+        </div>
+
+        <!-- INTERPOLATE PANEL -->
+        <div id="panel-dedup" class="hidden">
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">FRAME RATE MULTIPLIER</label>
+            <div class="grid grid-cols-3 gap-2" style="margin-top: 0.4rem;">
+              <button type="button" data-dedup-factor="2" class="dedup-factor-btn scale-btn active">2x</button>
+              <button type="button" data-dedup-factor="4" class="dedup-factor-btn scale-btn">4x</button>
+              <button type="button" data-dedup-factor="8" class="dedup-factor-btn scale-btn">8x</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">INTERPOLATION MODEL</label>
+            <div id="dedup-model-cards" class="flex flex-col gap-2" style="margin-top: 0.4rem;">
+              <!-- Dynamically filled with GMFSS, RIFE, GIMM -->
+            </div>
+          </div>
+
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">ANIMATION CADENCE</label>
+            <div class="flex flex-col gap-2" style="margin-top: 0.4rem;">
+              <button type="button" data-npass="0" class="cadence-btn config-card active w-full">
+                <div class="font-semibold text-sm">Auto-detect (Recommended)</div>
+                <div class="text-xs" style="color: var(--text-muted); margin-top: 2px;">Automatic duplicate frame deduplication</div>
+              </button>
+              <button type="button" data-npass="2" class="cadence-btn config-card w-full">
+                <div class="font-semibold text-sm">On Twos (12 fps -> 24 fps)</div>
+                <div class="text-xs" style="color: var(--text-muted); margin-top: 2px;">Standard 2s anime timing</div>
+              </button>
+              <button type="button" data-npass="3" class="cadence-btn config-card w-full">
+                <div class="font-semibold text-sm">On Threes (8 fps -> 24 fps)</div>
+                <div class="text-xs" style="color: var(--text-muted); margin-top: 2px;">3s anime timing</div>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- EASY MASK PANEL -->
+        <div id="panel-matanyone" class="hidden">
+          <div style="margin-bottom: 1.1rem;">
+            <label class="section-title block">EASY MASK AI</label>
+            
+            <!-- Target Frame Card -->
+            <div style="margin-top: 0.4rem; margin-bottom: 0.75rem;">
+              <button id="ma-load-target" type="button" class="config-card w-full flex items-center justify-between" style="padding: 0.6rem 0.75rem; text-align: left; cursor: pointer; user-select: none;">
+                <div class="flex items-center gap-2.5">
+                  <div style="width: 28px; height: 28px; border-radius: 6px; background: rgba(110, 164, 191, 0.15); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--accent);">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+                  </div>
+                  <div>
+                    <div class="font-semibold text-xs text-slate-100">Select Target on Frame 1</div>
+                    <div class="text-xs" style="color: var(--text-muted); font-size: 0.68rem; margin-top: 1px;">Load first frame to segment subject</div>
+                  </div>
+                </div>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted);"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+            </div>
+
+            <!-- Sleek Mask Tools Panel -->
+            <div id="ma-brush-controls" class="hidden" style="margin-bottom: 0.85rem; background: var(--bg-surface-2); border: 1px solid var(--border-subtle); border-radius: 0.45rem; padding: 0.65rem;">
+              <div class="flex items-center justify-between" style="margin-bottom: 0.45rem;">
+                <span class="text-xs font-semibold text-slate-300" style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;">Segmentation Tools</span>
+                <label class="flex items-center gap-1.5 cursor-pointer text-xs" style="font-size: 0.7rem; color: #cbd5e1; user-select: none;">
+                  <input type="checkbox" id="ma-preview" checked class="custom-checkbox" />
+                  <span>Overlay</span>
+                </label>
+              </div>
+              <div class="flex flex-col gap-2">
+                <!-- Mode buttons -->
+                <div class="grid grid-cols-3 gap-1.5">
+                  <button id="ma-autodetect" type="button" class="btn-tool scale-btn active flex items-center justify-center gap-1" title="Click subject to detect automatically">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
+                    <span>Auto-Detect</span>
+                  </button>
+                  <button id="ma-add" type="button" class="btn-tool scale-btn flex items-center justify-center gap-1" title="Paint to add mask area">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                    <span>Add</span>
+                  </button>
+                  <button id="ma-remove" type="button" class="btn-tool scale-btn flex items-center justify-center gap-1" title="Paint to erase mask area">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
+                    <span>Erase</span>
+                  </button>
+                </div>
+
+                <!-- Action buttons -->
+                <div class="grid grid-cols-3 gap-1.5">
+                  <button id="ma-undo" type="button" class="btn-tool-sub flex items-center justify-center gap-1" title="Undo stroke">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+                    <span>Undo</span>
+                  </button>
+                  <button id="ma-redo" type="button" class="btn-tool-sub flex items-center justify-center gap-1" title="Redo stroke">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
+                    <span>Redo</span>
+                  </button>
+                  <button id="ma-clear" type="button" class="btn-tool-sub flex items-center justify-center gap-1" style="color: #fca5a5;" title="Clear entire mask">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></svg>
+                    <span>Clear</span>
+                  </button>
+                </div>
+
+                <!-- Brush size row -->
+                <div class="flex items-center justify-between pt-1.5" style="border-top: 1px solid var(--border-subtle);">
+                  <span class="text-xs text-slate-400" style="font-size: 0.68rem;">Brush Size:</span>
+                  <div class="flex items-center gap-1">
+                    <button type="button" class="ma-brush-size-btn scale-btn" data-size="small">S</button>
+                    <button type="button" class="ma-brush-size-btn scale-btn active" data-size="medium">M</button>
+                    <button type="button" class="ma-brush-size-btn scale-btn" data-size="large">L</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Output Formats -->
+            <div style="margin-bottom: 0.85rem;">
+              <label class="section-title block">OUTPUT FORMATS</label>
+              <div class="flex flex-col gap-1.5" style="margin-top: 0.35rem;">
+                <label class="config-card flex items-center justify-between cursor-pointer" style="padding: 0.45rem 0.65rem; user-select: none;">
+                  <div class="flex items-center gap-2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/></svg>
+                    <div>
+                      <div class="text-xs font-semibold text-slate-100">Green Screen</div>
+                      <div class="text-xs" style="color: var(--text-muted); font-size: 0.68rem;">Chroma-keyable green background</div>
+                    </div>
+                  </div>
+                  <input type="checkbox" id="ma-out-fg" checked class="custom-checkbox" />
+                </label>
+
+                <label class="config-card flex items-center justify-between cursor-pointer" style="padding: 0.45rem 0.65rem; user-select: none;">
+                  <div class="flex items-center gap-2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20z" fill="#ffffff" fill-opacity="0.3"/></svg>
+                    <div>
+                      <div class="text-xs font-semibold text-slate-100">Alpha Matte</div>
+                      <div class="text-xs" style="color: var(--text-muted); font-size: 0.68rem;">Black &amp; white luminance mask</div>
+                    </div>
+                  </div>
+                  <input type="checkbox" id="ma-out-matte" checked class="custom-checkbox" />
+                </label>
+
+                <label class="config-card flex items-center justify-between cursor-pointer" style="padding: 0.45rem 0.65rem; user-select: none;">
+                  <div class="flex items-center gap-2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 3l18 18"/></svg>
+                    <div>
+                      <div class="text-xs font-semibold text-slate-100">Transparent Video</div>
+                      <div class="text-xs" style="color: var(--text-muted); font-size: 0.68rem;">Apple ProRes 4444 with alpha</div>
+                    </div>
+                  </div>
+                  <input type="checkbox" id="ma-out-transparent" class="custom-checkbox" />
+                </label>
+              </div>
+            </div>
+
+            <!-- Matte Edge Refinement -->
+            <div style="margin-bottom: 0.85rem;">
+              <label class="section-title block">MATTE REFINEMENT</label>
+              <div class="flex flex-col gap-2" style="margin-top: 0.35rem;">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs" style="color: var(--text-muted); font-size: 0.72rem;">Processing Resolution</span>
+                  <select id="ma-maxsize" class="custom-select text-xs">
+                    <option value="-1" selected>Auto (Original)</option>
+                    <option value="1080">1080p Max</option>
+                    <option value="720">720p Max</option>
+                    <option value="480">480p Max</option>
+                  </select>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="config-card" style="padding: 0.45rem 0.6rem;">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-slate-300" style="font-size: 0.72rem;">Erode</span>
+                      <span id="ma-erode-val" class="font-mono text-xs" style="color: var(--accent);">10</span>
+                    </div>
+                    <input type="range" id="ma-erode" min="0" max="60" value="10" class="custom-slider w-full" style="margin-top: 0.3rem;" />
+                  </div>
+                  <div class="config-card" style="padding: 0.45rem 0.6rem;">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-slate-300" style="font-size: 0.72rem;">Dilate</span>
+                      <span id="ma-dilate-val" class="font-mono text-xs" style="color: var(--accent);">10</span>
+                    </div>
+                    <input type="range" id="ma-dilate" min="0" max="60" value="10" class="custom-slider w-full" style="margin-top: 0.3rem;" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Hidden Defaults -->
+            <input type="hidden" id="ma-backend" value="auto" />
+            <input type="hidden" id="ma-precision" value="fp16" />
+
+            <p class="hint" id="ma-hint" style="font-size: 0.7rem; color: var(--text-muted); line-height: 1.4; margin-top: 0.5rem;">Select a video, click "Select Target on Frame 1", detect the subject, then render below.</p>
+          </div>
+        </div>
+
+        <!-- OUTPUT DESTINATION -->
+        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle);">
+          <label class="section-title block">OUTPUT DESTINATION</label>
+          <div id="output-card" class="output-card" style="margin-top: 0.4rem;">
+            <div id="btn-browse-output-dir" class="flex items-center gap-2 flex-1 truncate" style="cursor: pointer;" title="Click to browse export directory">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6EA4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+              <span id="output-dir-label" class="text-xs font-mono font-medium truncate" style="color: #f1f5f9;">output</span>
+            </div>
+            <button id="btn-toggle-output-dropdown" class="output-dropdown-btn" type="button" title="Toggle output videos list">
+              <svg id="output-chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+          </div>
+          <input type="hidden" id="output-dir-input" value="output" />
+
+          <!-- OUTPUT VIDEOS ACCORDION CONTAINER -->
+          <div id="output-video-list-container" class="output-dropdown-container hidden">
+            <div class="flex items-center justify-between" style="padding: 0.2rem 0.1rem; margin-bottom: 0.35rem;">
+              <span class="text-xs font-semibold" style="color: var(--accent); font-size: 0.7rem; letter-spacing: 0.05em;">OUTPUT VIDEOS</span>
+              <button id="btn-refresh-output-videos" type="button" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px;" title="Refresh output list">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+              </button>
+            </div>
+            <div id="output-video-list" class="flex flex-col gap-2" style="max-height: 12rem; overflow-y: auto;">
+              <!-- Dynamically rendered output videos -->
+            </div>
+            <button id="btn-clear-output-videos" class="btn-clear-videos" type="button" title="Delete all videos in output folder">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+              <span>Clear Videos</span>
+            </button>
+          </div>
+
+          <!-- QUEUE BUTTON -->
+          <button id="btn-toggle-queue" class="btn-queue" type="button" title="View render queue">
+            <div class="flex items-center gap-2">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6EA4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>
+              <span>Render Queue</span>
+            </div>
+            <span id="queue-count-badge" class="queue-badge">0 Items</span>
+          </button>
+        </div>
+
+      </div>
+
+      <!-- RENDER ACTION SECTION -->
+      <div style="padding: 1rem; background-color: var(--bg-surface-1); border-top: 1px solid var(--border-subtle);">
+        <button id="btn-render" class="btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+          <span>Render Video</span>
+        </button>
+        <button id="btn-cancel" class="btn-danger hidden" style="margin-top: 0.5rem;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+          <span>Cancel Render</span>
+        </button>
+      </div>
+
+    </aside>
+
+    <!-- MAIN CANVAS STAGE -->
+    <main class="canvas-area">
+
+      <!-- TOOLBAR -->
+      <div class="canvas-toolbar">
+        <!-- LEFT STATUS / SPACER -->
+        <div class="toolbar-left flex items-center">
+        </div>
+
+        <!-- CENTER: VIEW MODE TOGGLES (1-WINDOW VS 2-WINDOW) -->
+        <div class="view-toggle-group">
+          <button id="btn-view-split" class="view-toggle-btn active" type="button" title="Dual Split View (2 Windows)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><line x1="12" x2="12" y1="3" y2="21"/></svg>
+          </button>
+          <button id="btn-view-single" class="view-toggle-btn" type="button" title="Single Window View (1 Window)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
+          </button>
+        </div>
+
+        <!-- RIGHT: ZOOM TOOLS & RESET VIEW -->
+        <div class="toolbar-right flex items-center gap-3">
+          <!-- ZOOM TOOLS -->
+          <div class="flex items-center gap-1" style="background: var(--bg-surface-2); padding: 0.2rem 0.4rem; border-radius: 0.375rem;">
+            <button id="btn-zoom-out" style="background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 2px;" title="Zoom Out">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+            </button>
+            <span id="zoom-badge" class="text-xs font-mono" style="padding: 0 0.4rem;">100%</span>
+            <button id="btn-zoom-in" style="background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 2px;" title="Zoom In">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="11" x2="11" y1="8" y2="14"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+            </button>
+          </div>
+
+          <!-- RESET VIEW BUTTON -->
+          <button id="btn-reset-view" style="background: var(--bg-surface-2); border: 1px solid var(--border-subtle); color: #fff; padding: 0.35rem 0.75rem; border-radius: 0.375rem; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; font-weight: 600;" title="Reset view to 100% and center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            <span>Reset View</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- VIEWPORTS STAGE -->
+      <div id="player-stage" class="stage-container">
+        <!-- LEFT VIEWPORT -->
+        <div id="viewport-left" class="viewport-container active-window">
+          <!-- Floating Window Badge -->
+          <div class="window-badge">
+            <span class="font-bold" style="color: #f1f5f9;">BEFORE</span>
+            <span id="before-meta-badge" style="color: #94a3b8;">Original</span>
+          </div>
+
+          <!-- Corner Brackets for active window highlight -->
+          <div class="corner-bracket top-left"></div>
+          <div class="corner-bracket top-right"></div>
+          <div class="corner-bracket bottom-left"></div>
+          <div class="corner-bracket bottom-right"></div>
+
+          <div id="wrapper-left" class="video-wrapper">
+            <video id="video-left" preload="metadata" playsinline muted></video>
+            <div id="placeholder-left" class="absolute inset-0 flex flex-col items-center justify-center" style="color: #64748b;">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4; margin-bottom: 0.5rem;"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
+              <span class="text-sm font-medium" style="color: #94a3b8;">No input video selected</span>
+              <button id="btn-stage-browse" style="margin-top: 0.75rem; background: var(--bg-surface-2); border: 1px solid var(--border-subtle); color: var(--accent); font-size: 0.75rem; font-weight: 600; padding: 0.4rem 0.8rem; border-radius: 0.375rem; cursor: pointer;">Upload Video</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT VIEWPORT -->
+        <div id="viewport-right" class="viewport-container">
+          <!-- Floating Window Badge -->
+          <div class="window-badge">
+            <span class="font-bold" style="color: var(--accent);">AFTER</span>
+            <span id="after-meta-badge" style="color: #cbd5e1;">Enhanced</span>
+          </div>
+
+          <!-- Corner Brackets for active window highlight -->
+          <div class="corner-bracket top-left"></div>
+          <div class="corner-bracket top-right"></div>
+          <div class="corner-bracket bottom-left"></div>
+          <div class="corner-bracket bottom-right"></div>
+
+          <div id="wrapper-right" class="video-wrapper">
+            <video id="video-right" preload="metadata" playsinline muted></video>
+            <div id="placeholder-right" class="absolute inset-0 flex flex-col items-center justify-center" style="color: #64748b;">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4; margin-bottom: 0.5rem;"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="m2 5 5 5"/></svg>
+              <span class="text-sm" style="color: #94a3b8;">Rendered output will appear here</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MATANYONE2 4-WINDOW STAGE -->
+      <div id="player-stage-ma2" class="stage-container four-view hidden">
+        <!-- WINDOW 1: INPUT VIDEO -->
+        <div id="viewport-ma-input" class="viewport-container active-window" data-ma-window="input">
+          <div class="window-badge">
+            <span class="font-bold" style="color: #f1f5f9;">INPUT</span>
+            <span id="ma-input-meta-badge" style="color: #94a3b8;">Original</span>
+          </div>
+          <div class="corner-bracket top-left"></div>
+          <div class="corner-bracket top-right"></div>
+          <div class="corner-bracket bottom-left"></div>
+          <div class="corner-bracket bottom-right"></div>
+          <div id="wrapper-ma-input" class="video-wrapper">
+            <video id="video-ma-input" preload="metadata" playsinline muted></video>
+            <div id="placeholder-ma-input" class="absolute inset-0 flex flex-col items-center justify-center" style="color: #64748b;">
+              <span class="text-sm" style="color: #94a3b8;">Select an input video</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- WINDOW 2: FIRST-FRAME TARGET MASK -->
+        <div id="viewport-ma-mask" class="viewport-container" data-ma-window="mask">
+          <div class="window-badge">
+            <span class="font-bold" style="color: var(--accent);">TARGET MASK</span>
+            <span id="ma-mask-meta-badge" style="color: #cbd5e1;">Frame 1</span>
+          </div>
+          <div class="corner-bracket top-left"></div>
+          <div class="corner-bracket top-right"></div>
+          <div class="corner-bracket bottom-left"></div>
+          <div class="corner-bracket bottom-right"></div>
+          <div id="ma-mask-stage" class="ma-mask-stage"></div>
+          <div id="placeholder-ma-mask" class="absolute inset-0 flex flex-col items-center justify-center" style="color: #64748b; pointer-events: none;">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4; margin-bottom: 0.5rem;"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+            <span class="text-sm" style="color: #94a3b8;">Click "Select Target on Frame 1",<br/>then Auto-Detect or paint the subject</span>
+          </div>
+        </div>
+
+        <!-- WINDOW 3: GREEN SCREEN RESULT -->
+        <div id="viewport-ma-greenscreen" class="viewport-container" data-ma-window="greenscreen">
+          <div class="window-badge">
+            <span class="font-bold" style="color: #22c55e;">GREEN SCREEN</span>
+            <span id="ma-gs-meta-badge" style="color: #cbd5e1;">Result</span>
+          </div>
+          <div class="corner-bracket top-left"></div>
+          <div class="corner-bracket top-right"></div>
+          <div class="corner-bracket bottom-left"></div>
+          <div class="corner-bracket bottom-right"></div>
+          <div id="wrapper-ma-greenscreen" class="video-wrapper">
+            <video id="video-ma-greenscreen" preload="metadata" playsinline muted></video>
+            <div id="placeholder-ma-greenscreen" class="absolute inset-0 flex flex-col items-center justify-center" style="color: #64748b;">
+              <span class="text-sm" style="color: #94a3b8;">Green-screen result appears here after render</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- WINDOW 4: ALPHA MATTE RESULT -->
+        <div id="viewport-ma-matte" class="viewport-container" data-ma-window="matte">
+          <div class="window-badge">
+            <span class="font-bold" style="color: #cbd5e1;">ALPHA MATTE</span>
+            <span id="ma-matte-meta-badge" style="color: #cbd5e1;">Result</span>
+          </div>
+          <div class="corner-bracket top-left"></div>
+          <div class="corner-bracket top-right"></div>
+          <div class="corner-bracket bottom-left"></div>
+          <div class="corner-bracket bottom-right"></div>
+          <div id="wrapper-ma-matte" class="video-wrapper">
+            <video id="video-ma-matte" preload="metadata" playsinline muted></video>
+            <div id="placeholder-ma-matte" class="absolute inset-0 flex flex-col items-center justify-center" style="color: #64748b;">
+              <span class="text-sm" style="color: #94a3b8;">Alpha matte appears here after render</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROGRESS BAR FOOTER -->
+      <div id="render-progress-card" class="hidden" style="padding: 1rem; background: var(--bg-surface-1); border-top: 1px solid var(--border-subtle);">
+        <div class="flex items-center justify-between text-sm" style="margin-bottom: 0.4rem;">
+          <div class="flex items-center gap-2">
+            <span id="progress-stage" class="font-semibold">Processing video...</span>
+          </div>
+          <span id="progress-percent" class="font-bold" style="color: var(--accent);">0%</span>
+        </div>
+
+        <div style="width: 100%; height: 8px; background: var(--bg-surface-3); border-radius: 9999px; overflow: hidden;" class="glowing-pulse">
+          <div id="progress-bar-fill" class="progress-shimmer" style="height: 100%; width: 0%; border-radius: 9999px;"></div>
+        </div>
+
+        <div class="flex items-center justify-between text-xs" style="color: var(--text-muted); margin-top: 0.5rem;">
+          <span id="progress-file-info">[1/1] video.mp4</span>
+          <div class="flex items-center gap-4 font-mono">
+            <span>ELAPSED: <span id="progress-elapsed" style="color: #f1f5f9;">00s</span></span>
+            <span>ETA: <span id="progress-eta" style="color: var(--accent);">--</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- COMPLETED BANNER -->
+      <div id="render-completed-banner" class="hidden flex items-center justify-between" style="padding: 0.75rem 1rem; background: var(--bg-surface-1); border-top: 1px solid rgba(16, 185, 129, 0.3);">
+        <div class="flex items-center gap-2-5">
+          <div style="width: 1.75rem; height: 1.75rem; border-radius: 50%; background: rgba(16, 185, 129, 0.2); color: #10b981; display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div>
+            <span class="font-bold text-sm" style="color: #10b981;">Render Completed!</span>
+            <span id="render-total-time" class="text-xs" style="color: #cbd5e1; margin-left: 0.5rem;">Took 1m 23s</span>
+          </div>
+        </div>
+        <button id="btn-close-banner" style="background: var(--bg-surface-2); border: 1px solid var(--border-subtle); color: #cbd5e1; padding: 0.25rem 0.65rem; border-radius: 0.25rem; font-size: 0.75rem; cursor: pointer;">Dismiss</button>
+      </div>
+
+      <!-- BOTTOM TRANSPORT BAR -->
+      <div id="transport-bar" class="transport-bar">
+
+        <!-- UNIFIED TRANSPORT (FOR UPSCALE) -->
+        <div id="transport-unified" class="flex items-center gap-4 w-full">
+          <div class="flex items-center gap-2">
+            <button id="btn-step-back" style="background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 0.3rem;" title="Previous Frame">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <button id="btn-play-pause" style="width: 2.25rem; height: 2.25rem; border-radius: 50%; background: var(--accent); color: #111827; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;" title="Play / Pause">
+              <svg id="play-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            </button>
+            <button id="btn-step-fwd" style="background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 0.3rem;" title="Next Frame">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+          </div>
+
+          <div class="text-xs font-mono" style="color: var(--text-muted); width: 8.5rem;">
+            <span id="timecode-current" style="color: #f1f5f9;">00:00:00</span> / <span id="timecode-total">00:00:00</span>
+          </div>
+
+          <div class="flex-1 flex items-center" style="margin: 0 0.5rem;">
+            <input type="range" id="timeline-scrubber" min="0" max="100" value="0" step="0.1" class="w-full" />
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button id="btn-loop" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.3rem;" title="Toggle Loop">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+            </button>
+            <button id="btn-mute" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.3rem;" title="Toggle Mute">
+              <svg id="mute-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- DUAL TRANSPORT (FOR SLOW-MO & INTERPOLATE) -->
+        <div id="transport-dual" class="grid grid-cols-2 gap-4 w-full hidden">
+          <!-- LEFT PLAYER CONTROLS -->
+          <div class="flex items-center gap-2">
+            <button id="btn-play-left" style="width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--bg-surface-2); color: #fff; border: 1px solid var(--border-subtle); cursor: pointer; display: flex; align-items: center; justify-content: center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            </button>
+            <input type="range" id="scrubber-left" min="0" max="100" value="0" step="0.1" class="flex-1" />
+            <span id="timecode-left" class="text-xs font-mono" style="color: var(--text-muted);">00:00</span>
+          </div>
+
+          <!-- RIGHT PLAYER CONTROLS -->
+          <div class="flex items-center gap-2">
+            <button id="btn-play-right" style="width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--accent); color: #111827; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            </button>
+            <input type="range" id="scrubber-right" min="0" max="100" value="0" step="0.1" class="flex-1" />
+            <span id="timecode-right" class="text-xs font-mono" style="color: var(--text-muted);">00:00</span>
+          </div>
+        </div>
+
+      </div>
+
+    </main>
+  </div>
+
+  <!-- QUEUE DRAWER OVERLAY -->
+  <div id="queue-drawer-overlay" class="queue-drawer-overlay hidden">
+    <div class="queue-drawer">
+      <div class="flex items-center justify-between" style="padding: 1rem; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface-2);">
+        <div class="flex items-center gap-2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6EA4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>
+          <span class="font-bold text-sm">RENDER QUEUE</span>
+        </div>
+        <button id="btn-close-queue" type="button" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;" title="Close Queue">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="queue-item-list" class="flex-1 overflow-y-auto flex flex-col gap-2" style="padding: 1rem;">
+        <!-- Dynamically populated -->
+      </div>
+      <div style="padding: 1rem; border-top: 1px solid var(--border-subtle); background: var(--bg-surface-2);" class="flex items-center justify-between">
+        <span id="queue-status-text" class="text-xs" style="color: var(--text-muted);">0 videos selected</span>
+        <button id="btn-queue-render" class="btn-primary" type="button" style="width: auto; padding: 0.5rem 1rem; font-size: 0.8rem;">Start Render</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RENAME VIDEO MODAL -->
+  <div id="rename-modal-overlay" class="queue-drawer-overlay hidden" style="align-items: center; justify-content: center;">
+    <div style="background: var(--bg-surface-1); border: 1px solid var(--border-light); border-radius: 0.5rem; width: 22rem; padding: 1.25rem; box-shadow: 0 12px 36px rgba(0,0,0,0.6); animation: slideIn 0.15s ease;">
+      <div class="flex items-center justify-between" style="margin-bottom: 1rem;">
+        <span class="font-bold text-sm">Rename Video</span>
+        <button id="btn-close-rename" type="button" style="background: none; border: none; color: var(--text-muted); cursor: pointer;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+        </button>
+      </div>
+      <div style="margin-bottom: 1rem;">
+        <label class="text-xs" style="color: var(--text-muted); display: block; margin-bottom: 0.35rem;">New Filename:</label>
+        <input type="text" id="rename-input" style="width: 100%; background: var(--bg-surface-2); border: 1px solid var(--border-subtle); border-radius: 0.375rem; padding: 0.55rem 0.75rem; font-size: 0.875rem; color: #fff; outline: none;" />
+      </div>
+      <div class="flex items-center justify-end gap-2">
+        <button id="btn-cancel-rename" type="button" class="tab-btn" style="background: var(--bg-surface-2); font-size: 0.8rem; padding: 0.4rem 0.8rem;">Cancel</button>
+        <button id="btn-confirm-rename" type="button" class="btn-primary" style="width: auto; font-size: 0.8rem; padding: 0.4rem 1rem;">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/mask_canvas.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

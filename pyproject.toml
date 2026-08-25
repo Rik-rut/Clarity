@@ -1,0 +1,98 @@
+[project]
+name = "clarity"
+version = "0.1.0"
+description = "Interactive CLI video upscaler powered by Real-CUGAN"
+readme = "README.md"
+authors = [
+    { name = "Ron", email = "152605095+Rik-rut@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "questionary>=2.1.1",
+    "opencv-python-headless",
+    "torch",
+    "torchvision",
+    "imageio",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "python-multipart>=0.0.9",
+    "aiofiles>=23.2.1",
+    # Runtime deps of shipped tabs live in CORE, not extras: `uv run` /
+    # `uv sync` without --all-extras performs an exact sync that prunes
+    # extra-only packages, which silently broke Interpolate (timm/scipy/…)
+    # and MatAnyone2 (omegaconf/tqdm) after any environment refresh.
+    # Interpolate (MultiPassDedup inference):
+    "timm",
+    "scipy",
+    "scikit-image",
+    "easydict",
+    "yacs",
+    "einops",
+    # MatAnyone2 (trimmed to what vendor/matanyone2 imports at inference
+    # time; full audit trail: src/video_upscaler/matanyone2/VENDOR_NOTES.md):
+    "omegaconf",
+    "tqdm",
+    # SAM click-to-segment for the MatAnyone2 mask editor:
+    "segment-anything>=1.0",
+]
+
+[project.optional-dependencies]
+# Optional acceleration only — everything a tab needs to RUN is above.
+# Custom Triton kernels ship as `triton-windows`; other platforms use the
+# stock Triton bundled with CUDA torch builds.
+fast = [
+    "triton-windows ; sys_platform == 'win32'",
+    # CuPy powers GMFSS's CUDA softsplat warping kernel; without it the
+    # interpolator falls back to a much slower pure-PyTorch warp. The
+    # cuda-toolkit metapackage provides the CUDA headers CuPy needs to
+    # compile that kernel at runtime, so no system-wide CUDA Toolkit
+    # install is required.
+    "cupy-cuda12x ; sys_platform != 'darwin'",
+    "cuda-toolkit[cudart,nvrtc]==12.* ; sys_platform != 'darwin'",
+]
+
+tensorrt = [
+    "onnx>=1.22.0",
+    "onnxruntime>=1.28.0",
+    # PyPI wheels cover Windows x86_64 and Linux x86_64/aarch64; macOS has no
+    # TensorRT. Advanced zip installs stay available via CLARITY_TENSORRT_DIR.
+    "tensorrt>=10.7 ; sys_platform != 'darwin'",
+]
+
+
+[project.scripts]
+clarity = "video_upscaler.cli:run"
+clarity-web = "video_upscaler.web.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.4,<0.13.0"]
+build-backend = "uv_build"
+
+# The distribution name is "clarity" (brand) but the import package is
+# video_upscaler — declare the module so uv_build finds src/video_upscaler/.
+[tool.uv.build-backend]
+module-name = "video_upscaler"
+
+# PyPI's default Windows/Linux torch wheel selection must come from the
+# official PyTorch index so GPU acceleration works on CUDA machines; macOS
+# resolves from PyPI instead (CUDA wheels don't exist for darwin, and PyPI
+# builds include Apple Metal/MPS support). Only torch uses the custom index
+# (explicit = true).
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]

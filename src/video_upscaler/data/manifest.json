@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "repo": "Rikrut/clarity",
+  "files": [
+    {
+      "group": "cugan",
+      "path": "cugan/up2x-latest-conservative.pth",
+      "dest": "up2x-latest-conservative.pth",
+      "tier": "essential",
+      "size": 5147249,
+      "sha256": "6cfe3b23687915d08ba96010f25198d9cfe8a683aa4131f1acf7eaa58ee1de93"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up2x-latest-denoise1x.pth",
+      "dest": "up2x-latest-denoise1x.pth",
+      "tier": "essential",
+      "size": 5147249,
+      "sha256": "2e783c39da6a6394fbc250fdd069c55eaedc43971c4f2405322f18949ce38573"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up2x-latest-denoise2x.pth",
+      "dest": "up2x-latest-denoise2x.pth",
+      "tier": "essential",
+      "size": 5147249,
+      "sha256": "8188b3faef4258cf748c59360cbc8086ebedf4a63eb9d5d6637d45f819d32496"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up2x-latest-denoise3x.pth",
+      "dest": "up2x-latest-denoise3x.pth",
+      "tier": "essential",
+      "size": 5147249,
+      "sha256": "0a14739f3f5fcbd74ec3ce2806d13a47916c916b20afe4a39d95f6df4ca6abd8"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up2x-latest-no-denoise.pth",
+      "dest": "up2x-latest-no-denoise.pth",
+      "tier": "essential",
+      "size": 5147249,
+      "sha256": "f491f9ecf6964ead9f3a36bf03e83527f32c6a341b683f7378ac6c1e2a5f0d16"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up3x-latest-conservative.pth",
+      "dest": "up3x-latest-conservative.pth",
+      "tier": "essential",
+      "size": 5154161,
+      "sha256": "f6ea5fd20380413beb2701182483fd80c2e86f3b3f08053eb3df4975184aefe3"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up3x-latest-denoise3x.pth",
+      "dest": "up3x-latest-denoise3x.pth",
+      "tier": "essential",
+      "size": 5154161,
+      "sha256": "39f1e6e90d50e5528a63f4ba1866bad23365a737cbea22a80769b2ec4c1c3285"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up3x-latest-no-denoise.pth",
+      "dest": "up3x-latest-no-denoise.pth",
+      "tier": "essential",
+      "size": 5154161,
+      "sha256": "763f0a87e70d744673f1a41db5396d5f334d22de97fff68ffc40deb91404a584"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up4x-latest-conservative.pth",
+      "dest": "up4x-latest-conservative.pth",
+      "tier": "essential",
+      "size": 5636403,
+      "sha256": "a8c8185def699b0883662a02df0ef2e6db3b0275170b6cc0d28089b64b273427"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up4x-latest-denoise3x.pth",
+      "dest": "up4x-latest-denoise3x.pth",
+      "tier": "essential",
+      "size": 5636403,
+      "sha256": "42bd8fcdae37c12c5b25ed59625266bfa65780071a8d38192d83756cb85e98dd"
+    },
+    {
+      "group": "cugan",
+      "path": "cugan/up4x-latest-no-denoise.pth",
+      "dest": "up4x-latest-no-denoise.pth",
+      "tier": "essential",
+      "size": 5636403,
+      "sha256": "aaf3ef78a488cce5d3842154925eb70ff8423b8298e2cd189ec66eb7f6f66fae"
+    },
+    {
+      "group": "amt",
+      "path": "amt/amt-g.pth",
+      "dest": "amt-g.pth",
+      "tier": "full",
+      "size": 122649595,
+      "sha256": "a39af8744e8e6db16ebd29cb3dd09596fae38f360d8bb024288b3fe468256d07"
+    },
+    {
+      "group": "amt",
+      "path": "amt/amt-l.pth",
+      "dest": "amt-l.pth",
+      "tier": "full",
+      "size": 51816419,
+      "sha256": "985a3569f6e9e27d1a45a96ed02518cff9cf5cbee49c88193a84afbd8cf264f3"
+    },
+    {
+      "group": "amt",
+      "path": "amt/amt-s.pth",
+      "dest": "amt-s.pth",
+      "tier": "essential",
+      "size": 12038359,
+      "sha256": "07e7e03405c213fe4405678db9b42d05671e48c56faf6a441b99bb0047d3cf77"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/raft-things.pth",
+      "dest": "raft-things.pth",
+      "tier": "full",
+      "size": 21108000,
+      "sha256": "fcfa4125d6418f4de95d84aec20a3c5f4e205101715a79f193243c186ac9a7e1"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/rife48.pkl",
+      "dest": "rife48.pkl",
+      "tier": "full",
+      "size": 21349595,
+      "sha256": "9735baaa262a848b0e5ea576364e76a252681e81f8aef58f035b79c83fa8c74e"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/gimmvfi_r_arb_lpips.pt",
+      "dest": "gimmvfi_r_arb_lpips.pt",
+      "tier": "full",
+      "size": 79308129,
+      "sha256": "b33e41536850594c01551978c4b63b1acd291c60d22310fbb6a4e57ac375033f"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/gimmvfi_f_arb_lpips.pt",
+      "dest": "gimmvfi_f_arb_lpips.pt",
+      "tier": "full",
+      "size": 122823503,
+      "sha256": "f2d52a1424d857a921e56fb82d9312ec27d58bbcbd58a7c3534593b9e6157858"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/train_log_pg104/feat.pkl",
+      "dest": "train_log_pg104/feat.pkl",
+      "tier": "full",
+      "size": 3259059,
+      "sha256": "3de9e046c68b8cdedaba7490c7b33d50bca69f4b2e8932b23b28836f5c2d81f9"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/train_log_pg104/flownet.pkl",
+      "dest": "train_log_pg104/flownet.pkl",
+      "tier": "full",
+      "size": 18916681,
+      "sha256": "31fa34960d6326f231c35db9070728419dbad78b463567601dfb6b34049789ef"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/train_log_pg104/fusionnet.pkl",
+      "dest": "train_log_pg104/fusionnet.pkl",
+      "tier": "full",
+      "size": 31423429,
+      "sha256": "6098e143f239aedcac854267df251ff6945a10d8ca14e0b1ac9afe5f51c36474"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/train_log_pg104/metric.pkl",
+      "dest": "train_log_pg104/metric.pkl",
+      "tier": "full",
+      "size": 484523,
+      "sha256": "b4fe92d9fb0d18cca98989f28733a45b9fbf0c3a23e1a9d8a19f4df42680e519"
+    },
+    {
+      "group": "dedup",
+      "path": "dedup/train_log_pg104/rife.pkl",
+      "dest": "train_log_pg104/rife.pkl",
+      "tier": "full",
+      "size": 21261539,
+      "sha256": "a222360fa1b3e794d2d5236a3b8513f4c9c09960b0742733546888930f383e56"
+    },
+    {
+      "group": "matanyone",
+      "path": "matanyone/matanyone2.pth",
+      "dest": "matanyone2.pth",
+      "tier": "full",
+      "size": 141429115,
+      "sha256": "5e9821e4087231427376b437c85bb6e072b41e582314f06fd524f75bc4af5914"
+    },
+    {
+      "group": "sam",
+      "path": "sam/sam_vit_b_01ec64.pth",
+      "dest": "sam_vit_b_01ec64.pth",
+      "tier": "full",
+      "size": 375042383,
+      "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912"
+    }
+  ]
+}

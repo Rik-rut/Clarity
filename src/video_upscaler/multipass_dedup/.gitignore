@@ -1,0 +1,2 @@
+# Model weights are stored in models/multipassdedup/ (gitignored) -- not in the source tree
+weights/

@@ -1,0 +1,6 @@
+network:
+  name: video_upscaler.amt.networks.amt_l.Model
+  params:
+    corr_radius: 3
+    corr_lvls: 4
+    num_flows: 5
