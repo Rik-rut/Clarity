@@ -135,7 +135,6 @@ original video stays untouched.
 ### 3. Interpolation Models (Anime Dedup)
 - **GMFSS (Fortuna)**: Industry-standard anime frame interpolation. Ideal for 2D animation with duplicate frame cadences.
 - **RIFE (Practical-RIFE)**: High-speed real-time interpolation with great motion flow.
-- **GIMM (GIMM-VFI)**: Advanced INR interpolation that produces sharp transitions on fast movements.
 
 ### 4. Matting Model (MatAnyone2)
 - **MatAnyone2**: State-of-the-art object matting. Click a subject or paint a
@@ -209,5 +208,5 @@ Higher multipliers (`4x` upscale, `8x` slowmo) and larger videos (like 4K) requi
 - **AI Models & Engines**: Third-party models carry their respective licenses (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
   - [Real-CUGAN](https://github.com/bilibili/ailab/tree/main/Real-CUGAN) by bilibili AI Lab.
   - [AMT](https://github.com/mcg-nku/amt) by MCG-NKU (Non-Commercial use).
-  - [GMFSS / MultiPassDedup / RIFE / GIMM-VFI](https://github.com/AlexWortega/MultiPassDedup).
+  - [GMFSS / MultiPassDedup / RIFE](https://github.com/AlexWortega/MultiPassDedup).
   - [MatAnyone2](https://github.com/pq-yang/MatAnyone2) by pq-yang / S-Lab (Non-Commercial use).

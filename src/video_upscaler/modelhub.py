@@ -127,6 +127,19 @@ def _local_base_dir(base: str) -> Path | None:
     return None
 
 
+def _entry_base(entry: dict[str, Any]) -> str:
+    """Hub base for one entry — optional per-entry 'repo' override.
+
+    Entries may set "repo": "<owner>/<name>" to fetch from a different
+    Hugging Face repo (e.g. a separate matting-models repo) while the rest
+    of the manifest keeps using the default hub.
+    """
+    repo = entry.get("repo")
+    if repo:
+        return f"https://huggingface.co/{repo}/resolve/main"
+    return hub_base()
+
+
 def _entry_source_url(base: str, rel_path: str) -> str:
     return f"{base.rstrip('/')}/{rel_path}"
 
@@ -192,7 +205,7 @@ def install_entry(entry: dict[str, Any], quiet_existing: bool = False) -> Path:
             print(f"Copying {source.name} from local hub...")
             shutil.copyfile(source, temp_path)
         else:
-            url = _entry_source_url(base, entry["path"])
+            url = _entry_source_url(_entry_base(entry), entry["path"])
             try:
                 _download_http(url, temp_path, label, int(entry["size"]))
             except (urllib.error.URLError, OSError) as exc:

@@ -529,6 +529,11 @@ class RealCUGANTensorRTEngine:
             else contextlib.nullcontext()
         )
         stream_handle = getattr(self._stream, "cuda_stream", 0)
+        if isinstance(self._stream, torch.cuda.Stream):
+            # x is produced on the current (default) stream; the engine side
+            # stream must wait for those kernels before copy_ reads it, or
+            # tiles are intermittently corrupted mid-write.
+            self._stream.wait_stream(torch.cuda.current_stream(self._device))
         with stream_ctx:
             self._in_buf.copy_(x)
             self._context.execute_async_v3(stream_handle=stream_handle)

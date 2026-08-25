@@ -142,7 +142,7 @@ def test_matanyone2_e2e(tmp_path, monkeypatch):
 def test_matanyone2_cancel(tmp_path, monkeypatch):
     """Cancel mid-job lands on 'cancelled' and stops further processing."""
     src = _synthetic_clip(tmp_path, seconds=30.0)
-    manager, _, _ = _manager(tmp_path, monkeypatch)
+    manager, _, completed = _manager(tmp_path, monkeypatch)
     started = manager.submit_job("MatAnyone2", [src], _job_params(), tmp_path / "out")
 
     stages_seen = []
@@ -176,3 +176,12 @@ def test_matanyone2_cancel(tmp_path, monkeypatch):
         time.sleep(0.2)
     assert settled is not None, "job did not settle after cancel"
     assert settled.status == "cancelled"
+
+    # The job thread releases cached models (free_gpu_memory) AFTER setting
+    # the final status but BEFORE its completion broadcast. Wait for that
+    # broadcast so the lingering thread cannot clear model singletons while
+    # a later test (e.g. test_ma2_model) is using them.
+    deadline = time.time() + _DEADLINE
+    while time.time() < deadline and not completed:
+        time.sleep(0.1)
+    assert completed, "job thread never broadcast completion"

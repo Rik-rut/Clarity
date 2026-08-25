@@ -10,11 +10,25 @@ from video_upscaler.dedup_backend import (
     DEDUP_MODELS,
     check_dedup_weights,
     detect_dedup_device,
-    get_dedup_weights_path,
     parse_npass,
     validate_model_type,
 )
 from video_upscaler.dedup import build_dedup_plan, ensure_dedup_weights
+
+GMFSS_FILES = (
+    "train_log_pg104/feat.pkl",
+    "train_log_pg104/flownet.pkl",
+    "train_log_pg104/fusionnet.pkl",
+    "train_log_pg104/metric.pkl",
+    "train_log_pg104/rife.pkl",
+)
+
+
+def _install_gmfss_weights(tmp_path: Path, only: tuple[str, ...] = GMFSS_FILES) -> None:
+    for rel in only:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
 
 
 def test_validate_model_type() -> None:
@@ -22,14 +36,15 @@ def test_validate_model_type() -> None:
     assert validate_model_type("GMFSS") == "gmfss"
     assert validate_model_type("rife") == "rife"
     assert validate_model_type("RIFE") == "rife"
-    assert validate_model_type("gimm") == "gimm"
-    assert validate_model_type("  GIMM  ") == "gimm"
 
     with pytest.raises(ValueError, match="Invalid MultiPassDedup model"):
         validate_model_type("cugan")
 
     with pytest.raises(ValueError, match="Invalid MultiPassDedup model"):
         validate_model_type("amt-s")
+
+    with pytest.raises(ValueError, match="Invalid MultiPassDedup model"):
+        validate_model_type("gimm")
 
 
 def test_parse_npass_mappings() -> None:
@@ -53,21 +68,26 @@ def test_parse_npass_mappings() -> None:
         parse_npass(None)  # type: ignore[arg-type]
 
 
-def test_get_dedup_weights_path(tmp_path: Path) -> None:
-    config.DEDUP_MODELS_DIR = tmp_path
-    assert get_dedup_weights_path("gmfss") == tmp_path / "train_log_pg104"
-    assert get_dedup_weights_path("rife") == tmp_path / "rife48.pkl"
-    assert get_dedup_weights_path("gimm") == tmp_path / "gimmvfi_r_arb_lpips.pt"
-
-
 def test_check_dedup_weights_missing_and_present(tmp_path: Path) -> None:
     config.DEDUP_MODELS_DIR = tmp_path
     msg = check_dedup_weights("gmfss")
     assert msg is not None
     assert "train_log_pg104" in msg
 
-    # Create weights directory
+    # Regression: a partial install (directory exists, some files missing)
+    # must still be reported as incomplete, not silently pass.
     (tmp_path / "train_log_pg104").mkdir()
+    _install_gmfss_weights(tmp_path, only=(
+        "train_log_pg104/feat.pkl",
+        "train_log_pg104/flownet.pkl",
+        "train_log_pg104/fusionnet.pkl",
+    ))
+    msg_partial = check_dedup_weights("gmfss")
+    assert msg_partial is not None
+    assert "metric.pkl" in msg_partial
+    assert "rife.pkl" in msg_partial
+
+    _install_gmfss_weights(tmp_path)
     assert check_dedup_weights("gmfss") is None
 
     msg_rife = check_dedup_weights("rife")
@@ -76,6 +96,31 @@ def test_check_dedup_weights_missing_and_present(tmp_path: Path) -> None:
 
     (tmp_path / "rife48.pkl").touch()
     assert check_dedup_weights("rife") is None
+
+
+def test_ensure_dedup_weights_repairs_only_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partially-installed model downloads only the absent weight files."""
+    config.DEDUP_MODELS_DIR = tmp_path
+    _install_gmfss_weights(tmp_path, only=(
+        "train_log_pg104/feat.pkl",
+        "train_log_pg104/flownet.pkl",
+        "train_log_pg104/fusionnet.pkl",
+    ))
+
+    installed: list[str] = []
+
+    def fake_install(entry):
+        installed.append(str(entry["dest"]))
+
+    monkeypatch.setattr("video_upscaler.modelhub.install_entry", fake_install)
+    ensure_dedup_weights("gmfss", auto_download=True)
+
+    assert sorted(installed) == [
+        "train_log_pg104/metric.pkl",
+        "train_log_pg104/rife.pkl",
+    ]
 
 
 def test_ensure_dedup_weights_raises_on_missing(tmp_path: Path) -> None:
@@ -92,7 +137,7 @@ def test_detect_dedup_device_cpu_override(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_build_dedup_plan_non_interactive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config.DEDUP_MODELS_DIR = tmp_path
-    (tmp_path / "train_log_pg104").mkdir()
+    _install_gmfss_weights(tmp_path)
 
     monkeypatch.setattr("video_upscaler.dedup._interactive", lambda: False)
     plan = build_dedup_plan()
@@ -111,7 +156,7 @@ def test_dedup_and_amt_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     from video_upscaler.interp import select_amt_backend
 
     config.DEDUP_MODELS_DIR = tmp_path
-    (tmp_path / "train_log_pg104").mkdir()
+    _install_gmfss_weights(tmp_path)
     monkeypatch.setattr("video_upscaler.dedup._interactive", lambda: False)
 
     amt_sel_before = select_amt_backend("AMT-S")

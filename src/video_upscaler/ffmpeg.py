@@ -314,6 +314,8 @@ def encode_video(
         ]
     elif use_nvenc and nvenc_available():
         # Hardware encode: far faster than CPU x264, quality tuned via CQ.
+        # yuv420p is the universally decodable H.264 chroma format — browsers
+        # and media players struggle with 4:4:4, especially at 4K.
         command += [
             "-c:v",
             "h264_nvenc",
@@ -325,9 +327,22 @@ def encode_video(
             "20",
             "-b:v",
             "0",
+            "-pix_fmt",
+            "yuv420p",
         ]
     else:
-        command += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+        # libx264 defaults to yuv444p when fed rgb24, which browsers cannot
+        # reliably decode (4K renders as corrupted stripes). Force 4:2:0.
+        command += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+        ]
     if use_audio:
         command += ["-c:a", "copy"]
     if rotation:
@@ -339,6 +354,7 @@ def encode_video(
     )
     write_time = 0.0
     finalize_started: float | None = None
+    stdin_closed = False
     try:
         for frame in frames:
             data = frame.tobytes() if hasattr(frame, "tobytes") else frame
@@ -347,12 +363,22 @@ def encode_video(
             write_time += time.perf_counter() - write_started
         finalize_started = time.perf_counter()
         process.stdin.close()
+        stdin_closed = True
     except BrokenPipeError:
         finalize_started = time.perf_counter()
         process.stdin.close()
+        stdin_closed = True
     finally:
         if finalize_started is None:
             finalize_started = time.perf_counter()
+        if not stdin_closed:
+            # Exception mid-loop: close stdin so ffmpeg sees EOF and exits —
+            # otherwise the stderr drain below deadlocks forever and masks
+            # the original error.
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass
         stderr = process.stderr.read().decode("utf-8", errors="replace")
         process.stderr.close()
     returncode = process.wait()

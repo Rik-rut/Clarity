@@ -95,7 +95,9 @@ def test_manifest_has_matanyone_group_entry():
     entry = group_entries[0]
     assert entry["path"] == "matanyone/matanyone2.pth"
     assert entry["dest"] == "matanyone2.pth"
-    assert entry["tier"] == "full"
+    # MatAnyone2 ships in the essential download set (with SAM) so the
+    # Easy Mask tab works after the standard setup.
+    assert entry["tier"] == "essential"
     assert int(entry["size"]) > 0
     assert len(entry["sha256"]) == 64
 

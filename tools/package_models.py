@@ -34,10 +34,7 @@ from video_upscaler.models import INTERP_MODELS, PROFILES  # noqa: E402
 CUGAN_FILES = sorted({model for model, _ in PROFILES.values()})
 AMT_FILES = sorted(ckpt for ckpt, _ in INTERP_MODELS.values())
 DEDUP_TOP_FILES = [
-    "raft-things.pth",
     "rife48.pkl",
-    "gimmvfi_r_arb_lpips.pt",
-    "gimmvfi_f_arb_lpips.pt",
 ]
 GMFSS_FOLDER = "train_log_pg104"
 

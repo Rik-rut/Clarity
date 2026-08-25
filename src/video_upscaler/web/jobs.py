@@ -291,6 +291,16 @@ class JobManager:
                 if not params.get("mask_png"):
                     raise ValueError("MatAnyone2 requires a first-frame mask.")
 
+                # First-use recovery: fetch the matting + SAM checkpoints
+                # from the hub before processing (no-op when installed).
+                from video_upscaler import modelhub
+
+                for group in ("matanyone", "sam"):
+                    for entry in modelhub.missing_entries(
+                        modelhub.entries(group=group)
+                    ):
+                        modelhub.install_entry(entry)
+
                 def stage_reporter(stage_text: str) -> None:
                     job.stage = stage_text
 

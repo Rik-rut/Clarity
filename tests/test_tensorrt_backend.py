@@ -215,3 +215,60 @@ def test_ensure_engine_reuses_valid_cache(
     monkeypatch.setattr(tb, "build_engine", fake_build)
     assert tb.ensure_engine("m.pth", 2) == engine
     assert called == []
+
+
+def test_run_syncs_engine_stream_with_producer() -> None:
+    """Regression: _run must order the engine stream after the producer.
+
+    The input tensor is written by kernels on the current (default) stream;
+    without wait_stream the side-stream copy_ races those kernels and
+    intermittently corrupts tiles (half-frame stripe garbage).
+    """
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+
+    from video_upscaler import tensorrt_backend as tb
+
+    eng = object.__new__(tb.RealCUGANTensorRTEngine)
+    eng._scale = 2
+    eng._device = "cuda"
+
+    order: list[str] = []
+    stream = torch.cuda.Stream()
+    real_wait = stream.wait_stream
+    real_sync = stream.synchronize
+    stream.wait_stream = lambda other: (order.append("wait"), real_wait(other))
+    stream.synchronize = lambda: (order.append("sync"), real_sync())
+    eng._stream = stream
+
+    class _Ctx:
+        def __init__(self) -> None:
+            self.in_shape = None
+
+        def set_input_shape(self, name, shape) -> None:
+            self.in_shape = tuple(shape)
+
+        def get_tensor_shape(self, name):
+            b, c, h, w = self.in_shape
+            return (b, c, h * 2 - 72, w * 2 - 72)
+
+        def set_tensor_address(self, *args, **kwargs) -> None:
+            pass
+
+        def execute_async_v3(self, stream_handle=None) -> None:
+            order.append("execute")
+
+    eng._context = _Ctx()
+    eng._in_shape = None
+    eng._in_buf = None
+    eng._out_buf = None
+    eng._input_name = "input"
+    eng._output_name = "output"
+
+    x = torch.zeros((1, 3, 128, 128), dtype=torch.float16, device="cuda")
+    eng._run(x)
+
+    assert order[0] == "wait", "engine stream must wait for the producer stream"
+    assert "execute" in order
+    assert order[-1] == "sync", "engine stream must be synchronized before return"

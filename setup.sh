@@ -109,8 +109,8 @@ fi
 chmod +x run.sh 2>/dev/null || true
 echo
 echo "[5/5] AI models are downloaded on first use. You can also get them now:"
-echo "      1 Essential set  (~75 MB, enough for upscaling + basic slow-mo)"
-echo "      2 Everything     (~540 MB, all upscale/slow-mo/interpolation models)"
+echo "      1 Essential set  (~560 MB, upscaling + slow-mo + Easy Mask)"
+echo "      2 Everything     (~820 MB, all models including interpolation)"
 echo "      3 Skip           (Clarity will ask when it first needs one)"
 printf "      Choose [1], [2] or [3]: "
 read -r answer

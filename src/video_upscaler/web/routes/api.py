@@ -103,7 +103,6 @@ def get_system_info() -> Dict[str, Any]:
     dedup_models = [
         {"key": "gmfss", "name": "GMFSS (Fortuna)", "desc": "Best anime quality (default)"},
         {"key": "rife", "name": "RIFE (Practical-RIFE)", "desc": "Faster processing"},
-        {"key": "gimm", "name": "GIMM (GIMM-VFI)", "desc": "Alternative algorithm"},
     ]
     return {
         "backend": backend,
@@ -397,6 +396,18 @@ def validate_directory(req: ValidateDirRequest) -> Dict[str, Any]:
     except Exception as exc:
         return {"valid": False, "error": str(exc), "path": req.path}
 
+def _ensure_hub_group(group: str) -> None:
+    """Install any missing manifest entries for a group (web first-use path).
+
+    Raises modelhub.HubError when a download fails so callers can surface it.
+    """
+    from video_upscaler import modelhub
+
+    missing = modelhub.missing_entries(modelhub.entries(group=group))
+    for entry in missing:
+        modelhub.install_entry(entry)
+
+
 @router.post("/matanyone2/segment")
 def segment_matanyone_target(req: SegmentTargetRequest) -> Dict[str, Any]:
     """Auto-detect the subject under one or more clicks on the first frame.
@@ -413,6 +424,7 @@ def segment_matanyone_target(req: SegmentTargetRequest) -> Dict[str, Any]:
         mask_to_white_png_b64,
     )
     from video_upscaler.matanyone2 import sam_segment
+    from video_upscaler import modelhub
 
     vid_path = Path(req.path)
     if not vid_path.exists() or not vid_path.is_file():
@@ -454,15 +466,30 @@ def segment_matanyone_target(req: SegmentTargetRequest) -> Dict[str, Any]:
             )
             engine = "sam"
         except sam_segment.SamModelMissing:
-            if len(native_points) != 1:
-                # Multi-click refinement needs SAM; single clicks can fall back.
-                raise HTTPException(
-                    status_code=422,
-                    detail="SAM model is not installed for multi-click detection.",
+            # First-use recovery: fetch SAM from the model hub, then retry.
+            # Single clicks fall back to GrabCut when the download fails.
+            try:
+                _ensure_hub_group("sam")
+                mask = sam_segment.detect_subject_mask_sam(
+                    frame_rgb,
+                    native_points,
+                    labels=req.labels,
+                    cache_key=(str(vid_path), vid_path.stat().st_mtime),
                 )
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            mask = detect_subject_mask(frame_bgr, native_points[0])
-            engine = "grabcut"
+                engine = "sam"
+            except modelhub.HubError as exc:
+                if len(native_points) != 1:
+                    # Multi-click refinement needs SAM; single clicks can fall back.
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "SAM model is not installed and the automatic "
+                            f"download failed: {exc}"
+                        ),
+                    )
+                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                mask = detect_subject_mask(frame_bgr, native_points[0])
+                engine = "grabcut"
     except SubjectDetectionError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

@@ -166,8 +166,9 @@ def test_real_manifest_is_valid_and_complete() -> None:
         assert ("cugan", model_name) in dests
     for _, (ckpt_name, _) in INTERP_MODELS.items():
         assert ("amt", ckpt_name) in dests
-    for key, filename in DEDUP_MODEL_WEIGHT_FILES.items():
-        assert any(g == "dedup" and d.startswith(filename) for g, d in dests), key
+    for files in DEDUP_MODEL_WEIGHT_FILES.values():
+        for filename in files:
+            assert any(g == "dedup" and d == filename for g, d in dests), filename
 
 
 def test_dedup_entry_mapping(manifest: dict) -> None:
@@ -177,5 +178,3 @@ def test_dedup_entry_mapping(manifest: dict) -> None:
     assert gmfss == ["train_log_pg104/metric.pkl"]
     rife = [str(e["dest"]) for e in _dedup_entries_for("rife")]
     assert rife == []
-    gimm = sorted(str(e["dest"]) for e in _dedup_entries_for("gimm"))
-    assert "train_log_pg104/metric.pkl" not in gimm

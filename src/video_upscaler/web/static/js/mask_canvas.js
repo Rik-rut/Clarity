@@ -23,7 +23,9 @@
     const vctx = overlay.getContext("2d");
     const undoStack = [];
     const redoStack = [];
-    let mode = "add";
+    // Start in detect mode: the UI highlights Auto-Detect on load
+    // (index.html ma-autodetect .active) and clicks should auto-detect.
+    let mode = "detect";
     let radius = BRUSH_RADII.medium;
     let drawing = false;
     let lastPt = null;

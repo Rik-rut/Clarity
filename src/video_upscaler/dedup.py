@@ -62,7 +62,6 @@ def _model_options() -> dict[str, str]:
     return {
         "gmfss": "GMFSS (Fortuna) | Best quality (default)",
         "rife": "RIFE (Practical-RIFE) | Faster",
-        "gimm": "GIMM (GIMM-VFI) | Alternative",
     }
 
 
@@ -76,8 +75,6 @@ def _factor_options() -> dict[str, str]:
 
 def _dedup_entries_for(model_type: str) -> list[dict]:
     """Manifest entries required by one MultiPassDedup model type."""
-    from pathlib import PurePosixPath
-
     from video_upscaler import modelhub
 
     entries = modelhub.entries(group="dedup")
@@ -85,16 +82,16 @@ def _dedup_entries_for(model_type: str) -> list[dict]:
         return [e for e in entries if str(e["dest"]).startswith("train_log_pg104/")]
     if model_type == "rife":
         return [e for e in entries if str(e["dest"]) == "rife48.pkl"]
-    wanted = {"gimmvfi_r_arb_lpips.pt", "raft-things.pth"}
-    return [
-        e for e in entries if PurePosixPath(str(e["dest"])).name in wanted
-    ]
+    raise ValueError(f"Unknown MultiPassDedup model: {model_type}")
 
 
 def ensure_dedup_weights(model_type: str, auto_download: bool = False) -> None:
     """Verify weights exist, offering a hub download on first use.
 
-    Non-interactive runs raise SystemExit(1) when weights are missing unless auto_download=True.
+    Only entries whose destination file is absent are downloaded, so a
+    partially-installed model gets repaired instead of crashing inference.
+    Non-interactive runs raise SystemExit(1) when weights are missing unless
+    auto_download=True.
     """
     model_type = validate_model_type(model_type)
     missing = check_dedup_weights(model_type)
@@ -102,9 +99,9 @@ def ensure_dedup_weights(model_type: str, auto_download: bool = False) -> None:
         return
 
     from video_upscaler import modelhub
-    needed = _dedup_entries_for(model_type)
+    needed = modelhub.missing_entries(_dedup_entries_for(model_type))
 
-    if auto_download:
+    if auto_download and needed:
         for entry in needed:
             modelhub.install_entry(entry)
         return

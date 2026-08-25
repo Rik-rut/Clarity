@@ -116,35 +116,11 @@
     },
     {
       "group": "dedup",
-      "path": "dedup/raft-things.pth",
-      "dest": "raft-things.pth",
-      "tier": "full",
-      "size": 21108000,
-      "sha256": "fcfa4125d6418f4de95d84aec20a3c5f4e205101715a79f193243c186ac9a7e1"
-    },
-    {
-      "group": "dedup",
       "path": "dedup/rife48.pkl",
       "dest": "rife48.pkl",
       "tier": "full",
       "size": 21349595,
       "sha256": "9735baaa262a848b0e5ea576364e76a252681e81f8aef58f035b79c83fa8c74e"
-    },
-    {
-      "group": "dedup",
-      "path": "dedup/gimmvfi_r_arb_lpips.pt",
-      "dest": "gimmvfi_r_arb_lpips.pt",
-      "tier": "full",
-      "size": 79308129,
-      "sha256": "b33e41536850594c01551978c4b63b1acd291c60d22310fbb6a4e57ac375033f"
-    },
-    {
-      "group": "dedup",
-      "path": "dedup/gimmvfi_f_arb_lpips.pt",
-      "dest": "gimmvfi_f_arb_lpips.pt",
-      "tier": "full",
-      "size": 122823503,
-      "sha256": "f2d52a1424d857a921e56fb82d9312ec27d58bbcbd58a7c3534593b9e6157858"
     },
     {
       "group": "dedup",
@@ -190,7 +166,7 @@
       "group": "matanyone",
       "path": "matanyone/matanyone2.pth",
       "dest": "matanyone2.pth",
-      "tier": "full",
+      "tier": "essential",
       "size": 141429115,
       "sha256": "5e9821e4087231427376b437c85bb6e072b41e582314f06fd524f75bc4af5914"
     },
@@ -198,7 +174,7 @@
       "group": "sam",
       "path": "sam/sam_vit_b_01ec64.pth",
       "dest": "sam_vit_b_01ec64.pth",
-      "tier": "full",
+      "tier": "essential",
       "size": 375042383,
       "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912"
     }

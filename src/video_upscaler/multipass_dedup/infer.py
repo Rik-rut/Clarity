@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument('-fps', '--target_fps', dest='target_fps', type=float, default=60, help='interpolate to ? fps')
     parser.add_argument('-t', '--times', dest='times', type=int, default=-1, help='interpolate to ?x fps')
     parser.add_argument('-m', '--model_type', dest='model_type', type=str, default='gmfss',
-                        help='the interpolation model to use (gmfss/rife/gimm)')
+                        help='the interpolation model to use (gmfss/rife)')
     parser.add_argument('-s', '--enable_scdet', dest='enable_scdet', action='store_true', default=False,
                         help='enable scene change detection')
     parser.add_argument('-st', '--scdet_threshold', dest='scdet_threshold', type=float, default=0.3,
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     scale = args.scale  # flow scale
     hwaccel = args.hwaccel  # Use hardware acceleration video encoder
 
-    assert model_type in ['gmfss', 'rife', 'gimm'], f"not implement the model {model_type}"
+    assert model_type in ['gmfss', 'rife'], f"not implement the model {model_type}"
 
     model = load_model(args.weights)
 
