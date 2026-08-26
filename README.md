@@ -39,7 +39,7 @@ Clarity provides four powerful AI tools in one unified studio:
 
 ## 🖥️ How to Use the Web Studio
 
-![Clarity Web Studio Interface](docs/images/clarity-web-studio.png)
+![Clarity Web Studio Interface](src/video_upscaler/web/Screenshot%202026-08-24%20200402.png)
 
 1. **Add Your Videos**:
    - Simply drag and drop video files (`.mp4`, `.mkv`, `.mov`, `.avi`, `.webm`, etc.) onto the left panel or player area.
