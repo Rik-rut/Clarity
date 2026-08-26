@@ -3,17 +3,175 @@ setlocal
 cd /d "%~dp0"
 title Clarity
 
+REM Check if uv is in PATH or in default install location
 where uv >nul 2>nul
 if not %errorlevel%==0 (
-    echo uv was not found.
-    echo Please run setup.bat first, then start Clarity again.
-    echo.
-    pause
-    exit /b 1
+    if exist "%USERPROFILE%\.local\bin\uv.exe" (
+        set "PATH=%PATH%;%USERPROFILE%\.local\bin"
+    )
 )
 
-uv run --all-extras main.py
+REM Check if explicit setup requested or environment missing
+set "DO_SETUP=0"
+if "%~1"=="--setup" set "DO_SETUP=1"
+if "%~1"=="-s" set "DO_SETUP=1"
+if "%~1"=="setup" set "DO_SETUP=1"
+
+where uv >nul 2>nul
+if not %errorlevel%==0 set "DO_SETUP=1"
+
+if not exist ".venv\Scripts\python.exe" set "DO_SETUP=1"
+
+if "%DO_SETUP%"=="0" goto launch
+
+REM ==========================================
+REM            CLARITY SETUP ASSISTANT
+REM ==========================================
+echo ==========================================
+echo            CLARITY  -  SETUP
+echo      One-time initialization assistant
+echo ==========================================
+echo.
+echo Setting up Clarity...
+echo   1. uv          (Python environment manager)
+echo   2. Libraries   (PyTorch and AI backends)
+echo   3. FFmpeg      (video decoder/encoder)
+echo   4. GPU booster (TensorRT, if NVIDIA GPU detected)
+echo   5. AI models   (optional pre-download)
+echo.
+
+REM ---- [1/5] uv -----------------------------------------------------------
+where uv >nul 2>nul
+if %errorlevel%==0 (
+    echo [1/5] uv is already installed.
+    goto sync
+)
+echo [1/5] Installing uv (Python environment manager)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+if not exist "%USERPROFILE%\.local\bin\uv.exe" (
+    echo.
+    echo   uv did not appear after installation.
+    echo   Please close this window, open a NEW terminal, and run run.bat again.
+    goto fail
+)
+set "PATH=%PATH%;%USERPROFILE%\.local\bin"
+
+:sync
+echo.
+echo [2/5] Installing libraries (first time only - this downloads a few GB)...
+uv sync --all-extras
+if errorlevel 1 goto fail
+
+REM ---- [3/5] FFmpeg -------------------------------------------------------
+echo.
+where ffmpeg >nul 2>nul
+if %errorlevel%==0 (
+    echo [3/5] FFmpeg is already installed.
+    goto gpu_check
+)
+echo [3/5] FFmpeg is required but was not found.
+choice /C YN /M "      Try installing FFmpeg automatically via winget"
+if errorlevel 2 (
+    echo.
+    echo      Install it later from https://www.gyan.dev/ffmpeg/builds/
+    echo      and make sure ffmpeg.exe is on your PATH.
+    goto gpu_check
+)
+where winget >nul 2>nul
+if not %errorlevel%==0 (
+    echo.
+    echo      winget is unavailable on this PC.
+    echo      Install FFmpeg manually from https://www.gyan.dev/ffmpeg/builds/
+    goto gpu_check
+)
+winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements
+where ffmpeg >nul 2>nul
+if not %errorlevel%==0 (
+    echo.
+    echo      FFmpeg was installed but is not on PATH yet.
+    echo      You may need to restart your terminal if video decoding fails.
+)
+
+REM ---- [4/5] TensorRT (NVIDIA only) ---------------------------------------
+:gpu_check
+echo.
+nvidia-smi -L >nul 2>nul
+if not %errorlevel%==0 (
+    echo [4/5] No NVIDIA GPU detected - using PyTorch CUDA/CPU.
+    goto models_menu
+)
+echo [4/5] NVIDIA GPU detected.
+echo       TensorRT makes upscaling and interpolation several times faster (~3 GB download).
+choice /C YN /M "      Install the TensorRT booster now"
+if errorlevel 2 (
+    echo      Skipping TensorRT. Clarity will still use your GPU via CUDA.
+    goto models_menu
+)
+uv sync --all-extras
+if errorlevel 1 (
+    echo.
+    echo      TensorRT install failed - continuing without it.
+    echo      Clarity will still use your GPU via CUDA.
+)
+
+REM ---- [5/5] Models -------------------------------------------------------
+:models_menu
+echo.
+echo [5/5] AI models are downloaded on first use. You can also get them now:
+echo       1 Essential set  (~560 MB, upscaling + slow-mo + Easy Mask)
+echo       2 Everything     (~820 MB, all models including interpolation)
+echo       3 Skip           (Clarity will ask when it first needs one)
+choice /C 123 /N /M "      Choose [1], [2] or [3]"
+if errorlevel 3 goto done_setup
+if errorlevel 2 (
+    uv run --all-extras main.py --download-models all
+    goto done_setup
+)
+if errorlevel 1 (
+    uv run --all-extras main.py --download-models essential
+    goto done_setup
+)
+
+:done_setup
+echo.
+echo ==========================================
+echo               SETUP COMPLETE
+echo ==========================================
+echo Starting Clarity Web Studio...
+echo.
+
+REM ---- Launch Application -------------------------------------------------
+:launch
+if "%~1"=="--setup" (
+    echo Setup finished. Run run.bat to start Clarity anytime!
+    pause
+    exit /b 0
+)
+if "%~1"=="-s" (
+    echo Setup finished. Run run.bat to start Clarity anytime!
+    pause
+    exit /b 0
+)
+if "%~1"=="setup" (
+    echo Setup finished. Run run.bat to start Clarity anytime!
+    pause
+    exit /b 0
+)
+
+uv run --all-extras main.py %*
 
 echo.
 echo Clarity closed.
 pause
+exit /b 0
+
+:fail
+echo.
+echo ==========================================
+echo              SETUP FAILED
+echo ==========================================
+echo Check the messages above, fix the issue,
+echo then run run.bat again.
+echo.
+pause
+exit /b 1

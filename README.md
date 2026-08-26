@@ -2,120 +2,84 @@
 
 > **Transform low-resolution, choppy videos into crisp, high-fps masterpieces with a single click.**
 
-Clarity is an all-in-one AI video enhancement studio for **Windows, Linux, and macOS**. It comes with a modern **Web Studio interface** where you can drag and drop videos, compare Before & After results side-by-side with interactive zoom and scrubbing, and batch process videos using state-of-the-art AI models.
+Clarity is an all-in-one AI video enhancement studio for **Windows, Linux, and macOS**. It comes with a modern **Web Studio interface** where you can drag and drop videos, compare Before & After results side-by-side with interactive zoom and scrubbing, extract subjects with **Easy Mask**, and batch process videos using state-of-the-art AI models.
 
 ---
 
-## 🚀 Quick Start (Easy 3-Step Setup)
+## 🚀 Quick Start (1-Click Launch)
 
-No coding or complex setup needed. Clarity handles everything automatically!
+No coding, complex installation, or terminal commands needed. Clarity handles everything automatically!
 
 ### 1. Download Clarity
 - Click the green **Code** button at the top right of this page and select **Download ZIP**.
-- Extract the ZIP folder to anywhere on your computer (e.g., your Desktop or Documents).
+- Extract the ZIP folder anywhere on your computer (e.g., your Desktop or Documents).
 
-### 2. Run the One-Time Setup
-- **Windows:** Double-click **`Setup.bat`**
-- **Mac / Linux:** Open a terminal in the folder and run `bash setup.sh`
-
-> 💡 *The setup assistant will automatically install Python, the required AI libraries, video decoders (FFmpeg), and NVIDIA GPU acceleration (TensorRT).*
-
-### 3. Launch Clarity
+### 2. Launch Clarity
 - **Windows:** Double-click **`run.bat`**
-- **Mac / Linux:** Run `bash run.sh`
+- **Mac / Linux:** Open a terminal in the folder and run `bash run.sh` (or `./run.sh`)
 
-Your web browser will automatically open with the **Clarity Web Studio**!
+> 💡 *On your very first run, Clarity will automatically configure Python, install required AI libraries, video decoders (FFmpeg), and NVIDIA GPU acceleration (TensorRT). Once finished, your browser will immediately open with the **Clarity Web Studio**!*
+> 
+> *On daily runs, double-clicking `run.bat` launches the studio in under a second.*
 
 ---
 
 ## 🎨 What Can You Do With Clarity?
 
-Clarity provides four powerful AI tools in one clean interface:
+Clarity provides four powerful AI tools in one unified studio:
 
 | Mode | What It Does | Best For |
 | :--- | :--- | :--- |
-| 🔍 **Upscale** | Increases video resolution (**2x, 3x, or 4x**) up to crisp 4K while removing blur and compression artifacts. | Anime, animations, retro cartoons, and vintage clips. |
+| 🔍 **Upscale** | Increases video resolution (**2x, 3x, or 4x**) up to crisp 4K while removing blur, compression artifacts, and noise. | Anime, animations, retro cartoons, and vintage clips. |
 | ⏳ **Slow-Motion** | Generates brand-new AI intermediate frames to create ultra-smooth **2x, 4x, or 8x** slow-motion. | Action shots, sports replays, smooth motion clips. |
 | 🎞️ **Interpolate** | Replaces duplicate/choppy frames with newly synthesized motion (**2x, 4x, or 8x** fps multiplier). | Smoothing 24fps anime to silky 48fps or 60fps+ fluid playback. |
-| 🎭 **MatAnyone2** | Clicks or paints a subject out of a video in one pass, producing a **green-screen composite**, an **alpha matte**, and an optional **transparent WebM** alongside the original. | Removing or replacing backgrounds, rotoscoping people and objects. |
+| 🎭 **Easy Mask** | 1-click subject extraction and background separation. Outputs a **green-screen composite**, an **alpha matte**, and optional **transparent video**. | Background replacement, VFX compositing, rotoscoping subjects. |
 
 ---
 
 ## 🖥️ How to Use the Web Studio
 
-```
- ┌───────────────────────────┬─────────────────────────────────────────────────┐
- │       INPUT VIDEOS        │               INTERACTIVE PLAYER                │
- │  ┌─────────────────────┐  │  ┌──────────────────────┬────────────────────┐  │
- │  │ Drag & Drop Videos  │  │  │                      │                    │  │
- │  └─────────────────────┘  │  │      [BEFORE]        │      [AFTER]       │  │
- │  • video1.mp4  [...]      │  │      Original        │    AI Enhanced     │  │
- │  • video2.mp4  [...]      │  │                      │                    │  │
- │  [Clear Videos]           │  └──────────────────────┴────────────────────┘  │
- ├───────────────────────────┤  [◀◀] [▶ / ⏸] [▶▶] [⏮] ────⚪────────── [100%]   │
- │   UPSCALE / SLOWMO / MAT  │                                                 │
- │  • Multiplier: [2x] [4x]  │  ┌───────────────────────────────────────────┐  │
- │  • Model: Balanced / Deep │  │ Output Destination: /output/       [ ⌵ ]  │  │
- ├───────────────────────────┤  │ 📂 Output Videos & Batch Queue            │  │
- │      [ RENDER VIDEO ]     │  └───────────────────────────────────────────┘  │
- └───────────────────────────┴─────────────────────────────────────────────────┘
-```
+![Clarity Web Studio Interface](docs/images/clarity-web-studio.png)
 
 1. **Add Your Videos**:
    - Simply drag and drop video files (`.mp4`, `.mkv`, `.mov`, `.avi`, `.webm`, etc.) onto the left panel or player area.
    - You can also paste videos directly into the `input/` folder.
 2. **Choose Your AI Action**:
-   - Click **Upscale**, **Slow-motion**, **Interpolate**, or **MatAnyone2** at the top left.
-   - Choose your scale/multiplier (`2x`, `3x`, `4x`, `8x`).
+   - Click **Upscale**, **Slow-motion**, **Interpolate**, or **Easy Mask** in the top navigation bar.
+   - Choose your scale or speed multiplier (`2x`, `3x`, `4x`, `8x`).
    - Pick a model card that suits your video (e.g. *Balanced* for everyday videos, *Deep* for noisy clips).
 3. **Compare & Inspect**:
    - Preview original and enhanced videos side-by-side.
    - Use the **1-Window / 2-Window** toggle button to switch viewing modes.
-   - Scroll your mouse wheel to zoom in (up to 1000%) and drag to pan across details.
+   - Scroll your mouse wheel to zoom in (up to 1000%) and drag to pan across fine details.
    - Use the synchronized timeline scrubber and frame-by-frame step buttons to inspect individual frames.
 4. **Batch Processing (Multiple Videos)**:
    - Select multiple videos just like in Windows File Explorer: hold **Ctrl + Click** to select individual files, or **Shift + Click** to select a range.
-   - Click the **Render Queue** button at the bottom left to see the full queue.
+   - Click the **Render Queue** button at the bottom left to inspect queued jobs.
 5. **Hit Render**:
    - Click **Render Video**. A live progress bar will show the render stage, percent, elapsed time, and ETA.
    - When finished, your output video is saved to the `output/` folder and loaded into the player for instant review!
+6. **Reset App Anytime**:
+   - Click the **Reset App** button at the top right to instantly purge GPU VRAM caches and restore the studio to its pristine initial state.
 
 ---
 
-## 🎭 MatAnyone2: Object Matting
+## 🎭 Easy Mask: Subject & Background Separation
 
-MatAnyone2 is Clarity's object-matting model — mark a person or object on the
-first frame and MatAnyone2 tracks it through the entire clip. The tab uses a
-**4-window workspace**: input video, first-frame target editor, green-screen
-result, and alpha-matte result, with all controls in the left card. Each
-render can produce three files in your output folder: a
-**`*_greenscreen.mp4`** where the subject is composited over a green screen
-(for background replacement or chroma keying), a **`*_matte.mp4`** containing
-the alpha matte (the real transparency mask), and an optional
-**`*_transparent.mov`** (ProRes 4444) with true per-pixel alpha, so the
-original video stays untouched.
+Easy Mask is Clarity's AI-powered video matting tool — mark a person or object on the first frame, and Easy Mask tracks and segments it cleanly through the entire clip. 
 
-1. Open the **MatAnyone2** tab and select your clip.
-2. Click **Select Target on Frame 1**, then either click **Auto-Detect** and
-   simply click the subject (SAM-powered, same interaction as the official
-   demo — click again to refine the selection), or paint a rough mask —
-   you can **Add** / **Remove**, **Undo / Redo**, and the magenta **Preview**
-   overlay is on by default.
-3. Fine-tune the **Dilate** / **Erode** settings if the matte edge should grow
-   or shrink, pick the **Precision / Backend** for your hardware, and choose
-   whether to keep the **Alpha Matte**, the **Green Screen**, and/or the
-   **Transparent ProRes**.
-4. Click **RENDER MATANYONE2**. The first frame's mask is mirrored through the
-   whole clip automatically, and both result windows fill with the outputs.
+The workspace features a **4-window stage**:
+1. **Input Video**: Original footage with timeline synchronization.
+2. **Target Mask**: First-frame interactive painter and auto-detector.
+3. **Green Screen Result**: Subject composited over pure chroma green (`#00FF00`).
+4. **Alpha Matte Result**: High-contrast black & white luminance transparency mask.
 
-> 💡 The ~141 MB matting model and the ~375 MB SAM click-segmentation model
-> download on first use (or run
-> `uv run --all-extras main.py --download-models all` to fetch the full model
-> set upfront). Keep the painted mask roughly inside the subject — the model
-> refines and tracks the exact boundary itself. On GPUs with 6 GB or less,
-> inference internally runs at up to 720p shortest-side and upscales the
-> matte back to native resolution (override with
-> `CLARITY_MA2_INTERNAL_SIZE`; `0` disables the cap).
+### How to use Easy Mask:
+1. Open the **Easy Mask** tab and select a video from your list.
+2. Click **Select Target on Frame 1**.
+3. Choose **Auto-Detect** (✨) and click directly on the subject (powered by Segment Anything). You can also use **Add** (+) or **Erase** (-) brush tools to paint or touch up edges.
+4. Customize outputs: choose whether to generate **Green Screen**, **Alpha Matte**, or **Transparent ProRes 4444 video**.
+5. Click **Render Easy Mask** at the bottom. When finished, all preview viewports update with the keyed results!
 
 ---
 
@@ -136,10 +100,9 @@ original video stays untouched.
 - **GMFSS (Fortuna)**: Industry-standard anime frame interpolation. Ideal for 2D animation with duplicate frame cadences.
 - **RIFE (Practical-RIFE)**: High-speed real-time interpolation with great motion flow.
 
-### 4. Matting Model (MatAnyone2)
-- **MatAnyone2**: State-of-the-art object matting. Click a subject or paint a
-  rough mask on the first frame — it is tracked through the clip, outputting a
-  green-screen composite, an alpha matte, and an optional transparent WebM.
+### 4. Matting & Segmentation Models (Easy Mask)
+- **Easy Mask (MatAnyone2)**: State-of-the-art video object matting. Accurately tracks transparent hair, edges, and motion blur through entire video clips.
+- **SAM (Segment Anything)**: High-precision point-and-click subject detection on frame 1.
 
 ---
 
@@ -147,7 +110,7 @@ original video stays untouched.
 
 Clarity automatically detects your computer's hardware and selects the fastest acceleration available:
 
-- **NVIDIA GeForce / RTX GPUs**: Runs with **TensorRT (FP16)** and **CUDA** for blazing fast performance.
+- **NVIDIA GeForce / RTX GPUs**: Runs with dedicated **TensorRT (FP16)** CUDA streams for maximum GPU throughput.
 - **Apple Silicon Macs (M1/M2/M3/M4)**: Fully accelerated with Apple **Metal (MPS)**.
 - **Intel & AMD GPUs**: Supported via **Vulkan (ncnn)**.
 - **CPU**: Works on any computer even without a dedicated graphics card (processing will take longer).
@@ -182,9 +145,10 @@ Only the first time you use a specific AI model (Clarity will automatically down
 </details>
 
 <details>
-<summary><b>It says "Setup.bat did not find uv" or won't launch</b></summary>
+<summary><b>How do I re-run setup or repair packages?</b></summary>
 
-Close your terminal/command prompt window, open a new one, and run `Setup.bat` again. Windows requires a terminal restart to recognize newly installed environment paths.
+- **Windows:** Run `run.bat --setup` in command prompt.
+- **Mac / Linux:** Run `bash run.sh --setup`.
 </details>
 
 <details>
