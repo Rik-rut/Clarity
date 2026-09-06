@@ -158,7 +158,17 @@ if "%~1"=="setup" (
     exit /b 0
 )
 
-uv run --all-extras main.py %*
+REM ---- LAN access: 0.0.0.0 exposes the Web UI to your local network ----
+echo.
+echo   Clarity will be available on your local network.
+echo   Other devices can connect using:  http://YOUR-PC-IP:7860
+echo   (Find YOUR-PC-IP with:  ipconfig  -  IPv4 Address)
+echo.
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /i "IPv4"') do (
+    for /f "tokens=*" %%b in ("%%a") do echo   LAN URL:  http://%%b:7860
+)
+
+uv run --all-extras main.py --host 0.0.0.0 %*
 
 echo.
 echo Clarity closed.
