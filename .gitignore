@@ -60,3 +60,8 @@ MATANYONE2_CLARITY_IMPLEMENTATION.md
 # Internal dev docs kept only on disk
 docs/*
 .cache/
+
+# Tauri desktop application
+node_modules/
+src-tauri/target/
+src-tauri/resources/*.exe

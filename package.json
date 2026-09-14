@@ -1,0 +1,14 @@
+{
+  "name": "clarity-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "desktop:prepare": "powershell -ExecutionPolicy Bypass -File ./tools/prepare_desktop.ps1",
+    "desktop:dev": "npm run desktop:prepare && cargo tauri dev",
+    "desktop:build": "npm run desktop:prepare && cargo tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

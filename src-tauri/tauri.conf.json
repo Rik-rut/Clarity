@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "productName": "Clarity",
+  "version": "0.1.0",
+  "identifier": "com.clarity.studio",
+  "build": {
+    "frontendDist": "../src/video_upscaler/web/static",
+    "devUrl": "http://127.0.0.1:7860"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Clarity — AI Video Studio",
+        "width": 1380,
+        "height": 880,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/uv.exe",
+      "resources/ffmpeg.exe",
+      "resources/ffprobe.exe"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["en-US"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

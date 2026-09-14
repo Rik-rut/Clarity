@@ -1,0 +1,21 @@
+[package]
+name = "clarity-desktop"
+version = "0.1.0"
+description = "Clarity AI Video Upscaler & Interpolation Studio"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream"] }
+dirs = "5.0"
+winapi = { version = "0.3", features = ["jobapi2", "processthreadsapi", "winnt", "handleapi"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
