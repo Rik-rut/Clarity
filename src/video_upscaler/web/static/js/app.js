@@ -465,23 +465,47 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 4. Output Destination Accordion & Folder Chooser
+  async function pickOutputDirectory(initialDir) {
+    const invoke = tauriInvoke();
+    if (invoke) {
+      try {
+        // Native dialog owned by the main window. The HTTP route below spawns
+        // tkinter from the hidden backend process, which has no parent handle
+        // and loses focus fights against the webview.
+        const picked = await invoke('plugin:dialog|open', {
+          options: {
+            directory: true,
+            multiple: false,
+            title: 'Select Output Destination',
+            defaultPath: initialDir
+          }
+        });
+        return typeof picked === 'string' && picked ? picked : null;
+      } catch (e) {
+        console.debug('Native folder dialog unavailable, using server picker:', e);
+      }
+    }
+
+    const resp = await fetch('/api/directories/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initial_dir: initialDir })
+    });
+    const data = await resp.json();
+    return data && data.success && data.path ? data.path : null;
+  }
+
   if (elems.btnBrowseOutputDir) {
     elems.btnBrowseOutputDir.addEventListener('click', async () => {
       try {
         const initial = (elems.outputDirInput && elems.outputDirInput.value) || 'output';
-        const resp = await fetch('/api/directories/browse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ initial_dir: initial })
-        });
-        const data = await resp.json();
-        if (data.success && data.path) {
-          if (elems.outputDirInput) elems.outputDirInput.value = data.path;
-          if (elems.outputDirLabel) elems.outputDirLabel.textContent = data.path;
-          showToast(`Output set: ${data.path}`, 'success');
-          if (state.isOutputDropdownOpen) {
-            await loadOutputVideos(true);
-          }
+        const picked = await pickOutputDirectory(initial);
+        if (!picked) return;
+        if (elems.outputDirInput) elems.outputDirInput.value = picked;
+        if (elems.outputDirLabel) elems.outputDirLabel.textContent = picked;
+        showToast(`Output set: ${picked}`, 'success');
+        if (state.isOutputDropdownOpen) {
+          await loadOutputVideos(true);
         }
       } catch (e) {
         console.warn('Browse directory error:', e);
@@ -1061,32 +1085,80 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Drag & drop upload.
+  //
+  // The overlay is full-screen with pointer-events enabled while active, so a
+  // stuck 'active' class freezes the whole app. Tauri's native drag-drop handler
+  // is disabled in the window config to get these events at all on Windows; on
+  // top of that a drag can enter and never leave cleanly (dropped on a native
+  // dialog, window switched), so every path that shows the overlay also arms a
+  // watchdog that hides it.
   let dragCounter = 0;
+  let lastDragOver = 0;
+  let dragWatchdog = null;
+
+  function hideDragOverlay() {
+    dragCounter = 0;
+    if (elems.dragOverlay) elems.dragOverlay.classList.remove('active');
+    if (dragWatchdog) {
+      clearInterval(dragWatchdog);
+      dragWatchdog = null;
+    }
+  }
+
+  function showDragOverlay() {
+    lastDragOver = Date.now();
+    if (elems.dragOverlay) elems.dragOverlay.classList.add('active');
+    if (!dragWatchdog) {
+      dragWatchdog = setInterval(() => {
+        if (Date.now() - lastDragOver > 1500) hideDragOverlay();
+      }, 500);
+    }
+  }
+
+  function dragCarriesFiles(ev) {
+    const types = ev.dataTransfer && ev.dataTransfer.types;
+    if (!types || typeof types.indexOf === 'function') {
+      return !types || Array.prototype.indexOf.call(types, 'Files') !== -1;
+    }
+    return true;
+  }
+
   window.addEventListener('dragenter', (ev) => {
+    if (!dragCarriesFiles(ev)) return;
     ev.preventDefault();
     dragCounter++;
-    if (elems.dragOverlay) elems.dragOverlay.classList.add('active');
+    showDragOverlay();
   });
 
   window.addEventListener('dragleave', (ev) => {
+    if (!dragCarriesFiles(ev)) return;
     ev.preventDefault();
     dragCounter--;
-    if (dragCounter <= 0) {
-      dragCounter = 0;
-      if (elems.dragOverlay) elems.dragOverlay.classList.remove('active');
-    }
+    if (dragCounter <= 0) hideDragOverlay();
   });
 
   window.addEventListener('dragover', (ev) => {
+    if (!dragCarriesFiles(ev)) return;
     ev.preventDefault();
+    lastDragOver = Date.now();
   });
 
   window.addEventListener('drop', async (ev) => {
+    if (!dragCarriesFiles(ev)) return;
     ev.preventDefault();
-    dragCounter = 0;
-    if (elems.dragOverlay) elems.dragOverlay.classList.remove('active');
+    hideDragOverlay();
     if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length > 0) {
       await handleFileUpload(ev.dataTransfer.files);
+    }
+  });
+
+  // Safety nets: a drag that ends outside the window never fires 'drop'.
+  window.addEventListener('dragend', hideDragOverlay);
+  window.addEventListener('blur', hideDragOverlay);
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && elems.dragOverlay && elems.dragOverlay.classList.contains('active')) {
+      hideDragOverlay();
     }
   });
 
@@ -2332,51 +2404,66 @@ document.addEventListener('DOMContentLoaded', () => {
   updateMaRenderButton();
 
   // Desktop IPC Bridge & Notification Support
-  async function initDesktopBridge() {
-    try {
-      if (window.__TAURI__) {
-        console.log('Clarity running inside Tauri desktop shell');
-        if (window.__TAURI__.notification && typeof window.__TAURI__.notification.isPermissionGranted === 'function') {
-          let granted = await window.__TAURI__.notification.isPermissionGranted();
-          if (!granted && typeof window.__TAURI__.notification.requestPermission === 'function') {
-            const res = await window.__TAURI__.notification.requestPermission();
-            granted = res === 'granted';
-          }
-        } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-          Notification.requestPermission().catch(() => {});
-        }
-      } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
-    } catch (e) {
-      console.debug('Desktop notification permission check:', e);
+  // `withGlobalTauri` exposes only the core IPC entry point on a plain script
+  // page — the npm plugin wrappers are not injected, and the studio is served
+  // from the backend origin. So plugin calls go through the raw IPC command
+  // names, and are permitted for loopback pages by
+  // src-tauri/capabilities/local-backend.json.
+  function tauriInvoke() {
+    const tauri = typeof window !== 'undefined' ? window.__TAURI__ : null;
+    if (!tauri) return null;
+    if (tauri.core && typeof tauri.core.invoke === 'function') {
+      return tauri.core.invoke.bind(tauri.core);
     }
+    if (typeof tauri.invoke === 'function') return tauri.invoke.bind(tauri);
+    return null;
   }
 
-  function sendDesktopNotification(title, body) {
+  function sendWebNotification(title, body) {
     try {
-      if (window.__TAURI__ && window.__TAURI__.notification && typeof window.__TAURI__.notification.sendNotification === 'function') {
-        window.__TAURI__.notification.sendNotification({ title, body });
-        return;
-      }
-      if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
-        window.__TAURI__.core.invoke('plugin:notification|notify', { options: { title, body } })
-          .catch(() => {
-            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-              new Notification(title, { body });
-            }
-          });
-        return;
-      }
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification(title, { body });
       }
     } catch (e) {
-      console.debug('Failed to send desktop notification:', e);
+      console.debug('Web notification failed:', e);
     }
   }
 
+  async function initDesktopBridge() {
+    const invoke = tauriInvoke();
+    try {
+      if (invoke) {
+        console.log('Clarity running inside the Tauri desktop shell');
+        // Windows toasts need no prompt, but the plugin still models a
+        // permission; asking once keeps notify() from failing silently.
+        await invoke('plugin:notification|request_permission');
+        return;
+      }
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    } catch (e) {
+      console.debug('Notification permission setup skipped:', e);
+    }
+  }
+
+  function sendDesktopNotification(title, body) {
+    const invoke = tauriInvoke();
+    if (invoke) {
+      try {
+        invoke('plugin:notification|notify', { options: { title, body } })
+          .catch(() => sendWebNotification(title, body));
+      } catch (e) {
+        sendWebNotification(title, body);
+      }
+      return;
+    }
+    sendWebNotification(title, body);
+  }
+
   // 15. WebSocket Progress Broadcasting
+  let wsRetryDelay = 2000;
+
   function connectWebSocket() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${location.host}/api/ws/progress`);
@@ -2438,7 +2525,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    ws.onclose = () => setTimeout(connectWebSocket, 2000);
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      wsRetryDelay = 2000;
+    };
+
+    // A backend restart takes far longer than two seconds, so a fixed retry
+    // interval becomes a request storm. Back off, capped, reset on connect.
+    ws.onclose = () => {
+      const delay = wsRetryDelay;
+      wsRetryDelay = Math.min(wsRetryDelay * 2, 15000);
+      setTimeout(connectWebSocket, delay);
+    };
   }
 
   // Initialize

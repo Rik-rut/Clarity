@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from video_upscaler import config
@@ -60,11 +60,13 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     def read_index():
-        from fastapi.responses import HTMLResponse
         index_file = STATIC_DIR / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
-        return HTMLResponse("<!DOCTYPE html><html><head><title>Clarity Video AI</title></head><body><h1>Clarity Video AI</h1></body></html>")
+        return HTMLResponse(
+            "<!DOCTYPE html><html><head><title>Clarity Video AI</title></head>"
+            "<body><h1>Clarity Video AI</h1></body></html>"
+        )
 
     return app
 
@@ -98,10 +100,20 @@ def run_server(
     host: str = "127.0.0.1",
     port: int = 7860,
     open_browser: bool = True,
+    strict_port: bool = False,
 ) -> None:
     import uvicorn
 
-    actual_port = find_free_port(port, host)
+    if strict_port:
+        # The desktop shell reserved this exact port and is polling it. Drifting
+        # to port+1 would leave the shell polling a dead port forever, so fail
+        # loudly instead; the shell surfaces the failure with the backend log.
+        if is_port_in_use(port, host):
+            raise SystemExit(f"Requested port {port} is already in use on {host}")
+        actual_port = port
+    else:
+        actual_port = find_free_port(port, host)
+
     url = f"http://{host}:{actual_port}"
 
     print("")
@@ -131,7 +143,8 @@ def main() -> None:
                 pass
 
     no_browser = "--no-browser" in sys.argv
-    run_server(port=port, open_browser=not no_browser)
+    strict_port = "--strict-port" in sys.argv
+    run_server(port=port, open_browser=not no_browser, strict_port=strict_port)
 
 
 if __name__ == "__main__":

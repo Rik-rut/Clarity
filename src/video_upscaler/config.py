@@ -20,9 +20,16 @@ def _env_dir(name: str, default: Path) -> Path:
     return Path(value) if value else default
 
 
-INPUT_DIR = _env_dir("CLARITY_INPUT_DIR", BASE_DIR / "input")
-OUTPUT_DIR = _env_dir("CLARITY_OUTPUT_DIR", BASE_DIR / "output")
-MODELS_DIR = _env_dir("CLARITY_MODELS_DIR", BASE_DIR / "models")
+# Single writable root. The desktop shell sets CLARITY_DATA_DIR to
+# %LOCALAPPDATA%\Clarity so user media, weights and caches never live inside
+# the program directory; unset, it is the project root and the CLI/dev flow is
+# unchanged. Deriving everything from one variable keeps the shell and the app
+# from disagreeing about where a user's videos are.
+DATA_DIR = _env_dir("CLARITY_DATA_DIR", BASE_DIR)
+
+INPUT_DIR = _env_dir("CLARITY_INPUT_DIR", DATA_DIR / "input")
+OUTPUT_DIR = _env_dir("CLARITY_OUTPUT_DIR", DATA_DIR / "output")
+MODELS_DIR = _env_dir("CLARITY_MODELS_DIR", DATA_DIR / "models")
 
 SUPPORTED_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts"}
 
@@ -44,7 +51,10 @@ CUGAN_CACHE_MODE = int(os.environ.get("CLARITY_CUGAN_CACHE", "0"))
 # NVENC contends with CUDA inference on the torch path).
 USE_NVENC = os.environ.get("CLARITY_NVENC", "0").lower() not in ("0", "false", "off")
 
-TOOLS_DIR = _env_dir("CLARITY_TOOLS_DIR", BASE_DIR / "tools")
+TOOLS_DIR = _env_dir("CLARITY_TOOLS_DIR", DATA_DIR / "tools")
+
+# Scratch space for thumbnail and single-frame extraction caches.
+CACHE_DIR = _env_dir("CLARITY_CACHE_DIR", DATA_DIR / ".cache")
 
 # Hugging Face mirror for the official AMT pretrained checkpoints
 # (https://huggingface.co/lalala125/AMT). Checkpoint filenames are appended.
@@ -104,7 +114,7 @@ def ffmpeg_path() -> str | None:
 
 
 def ensure_directories() -> None:
-    """Create input/, output/, and models/ directories if they do not exist."""
-    for directory in (INPUT_DIR, OUTPUT_DIR, MODELS_DIR, DEDUP_MODELS_DIR):
+    """Create the writable data layout (input, output, models, caches)."""
+    for directory in (INPUT_DIR, OUTPUT_DIR, MODELS_DIR, DEDUP_MODELS_DIR, CACHE_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 

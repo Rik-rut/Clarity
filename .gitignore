@@ -43,11 +43,12 @@ src/video_upscaler/multipass_dedup/weights/
 
 # Model hub staging directory (upload to HuggingFace, never commit)
 CLARITY_MODELS/
+screenshots/*
 
 # Internal dev workflow files (kept locally, not shipped)
 .superpowers/
 .planning/
-docs/superpowers/
+docs/
 .opencode/
 graphify-out/
 revision-ref/*
@@ -64,4 +65,4 @@ docs/*
 # Tauri desktop application
 node_modules/
 src-tauri/target/
-src-tauri/resources/
+src-tauri/resources/

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "clarity-shell",
+  "description": "Boot shell on the Tauri asset origin: receives boot progress and failure events and can ask the shell to retry provisioning.",
+  "windows": ["main"],
+  "local": true,
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "clarity-local-backend",
+  "description": "The FastAPI UI served on loopback gets native notifications and a native folder picker. Scoped to the local origin only; it deliberately has no filesystem, shell or window-control access.",
+  "windows": ["main"],
+  "local": false,
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "notification:default",
+    "dialog:allow-open"
+  ]
+}

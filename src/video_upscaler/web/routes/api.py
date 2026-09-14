@@ -44,7 +44,7 @@ from video_upscaler.web.stream import stream_video_file
 
 router = APIRouter(prefix="/api")
 
-THUMBNAIL_CACHE_DIR = config.BASE_DIR / ".cache" / "thumbnails"
+THUMBNAIL_CACHE_DIR = config.CACHE_DIR / "thumbnails"
 THUMBNAIL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 class StartJobRequest(BaseModel):
@@ -81,6 +81,17 @@ class ClearVideosRequest(BaseModel):
 
 class BrowseDirRequest(BaseModel):
     initial_dir: Optional[str] = None
+
+@router.get("/health")
+def get_health() -> Dict[str, Any]:
+    """Liveness probe for the desktop shell.
+
+    Deliberately cheap: the shell polls this to decide whether the backend is
+    ready, so it must never import torch or query a GPU. /api/system/info does
+    both and is not a readiness probe.
+    """
+    return {"status": "ok"}
+
 
 @router.get("/system/info")
 def get_system_info() -> Dict[str, Any]:
@@ -348,7 +359,7 @@ def get_thumbnail(path: str = Query(...)) -> FileResponse:
         return FileResponse(cache_file, media_type="image/jpeg")
     raise HTTPException(status_code=500, detail="Could not generate thumbnail")
 
-FRAME_CACHE_DIR = config.BASE_DIR / ".cache" / "frames"
+FRAME_CACHE_DIR = config.CACHE_DIR / "frames"
 
 
 @router.get("/videos/frame")
