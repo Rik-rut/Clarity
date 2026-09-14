@@ -1,9 +1,9 @@
-"""Contract tests for the web UI, the desktop setup wizard and the Tauri shell.
+"""Contract tests for the web UI and the Tauri shell.
 
 These assert the *shape* of the desktop architecture: the studio page is a plain
-web app, the first-run wizard is served over HTTP by the Python provisioning
-server, and the Tauri window boots a dedicated shell that owns start / error /
-retry.
+web app, and the Tauri window boots a dedicated shell that owns start / error /
+retry. First-run provisioning belongs to the installer and the boot shell —
+there is no first-run wizard page.
 """
 
 from pathlib import Path
@@ -16,6 +16,7 @@ from video_upscaler.web.server import create_app
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = REPO_ROOT / "src" / "video_upscaler" / "web" / "static"
 TAURI_DIR = REPO_ROOT / "src-tauri"
+DESKTOP_DIR = REPO_ROOT / "src" / "video_upscaler" / "desktop"
 
 
 def _read(path: Path) -> str:
@@ -66,66 +67,26 @@ def test_app_js_prefers_the_native_folder_dialog_in_desktop_mode():
 
 # ------------------------------------------------------------------- wizard
 
-def test_setup_html_exists_and_contains_core_elements():
-    content = _read(STATIC_DIR / "setup.html")
+def test_the_desktop_wizard_is_gone():
+    """Provisioning belongs to the installer and the boot shell.
 
-    # Brand & theme
-    assert "CLARITY" in content
-    assert "DESKTOP SETUP" in content or "First-Time Setup" in content
-    assert "clarity.jpg" in content
-
-    # Stepper elements
-    for step in ("step-python", "step-venv", "step-dependencies", "step-models"):
-        assert f'id="{step}"' in content
-
-    # Progress & metrics
-    for element in (
-        "setup-progress-bar",
-        "setup-percent-text",
-        "setup-stage-title",
-        "setup-status-message",
-        "setup-speed-text",
-        "setup-eta-text",
-    ):
-        assert f'id="{element}"' in content
-
-    # Error & retry, success, log drawer
-    for element in (
-        "setup-error-banner",
-        "btn-retry-setup",
-        "setup-error-message",
-        "setup-success-banner",
-        "logs-accordion",
-        "btn-toggle-logs",
-        "logs-terminal",
-    ):
-        assert f'id="{element}"' in content
-
-    # Absolute asset path: the wizard is served by the backend, like the studio.
-    assert 'src="/static/js/setup.js"' in content
+    The wizard was a second implementation of first-run setup, served from a
+    second origin on a second port. When it disagreed with the installer about
+    where data lived, the models were downloaded twice.
+    """
+    assert not (STATIC_DIR / "setup.html").exists()
+    assert not (STATIC_DIR / "js" / "setup.js").exists()
+    assert not (DESKTOP_DIR / "server.py").exists()
+    assert not (DESKTOP_DIR / "bootstrap.py").exists()
+    assert not (DESKTOP_DIR / "location.py").exists()
 
 
-def test_setup_js_drives_the_http_wizard():
-    content = _read(STATIC_DIR / "js" / "setup.js")
-    for endpoint in (
-        "/api/setup/status",
-        "/api/setup/progress",
-        "/api/setup/detect-gpu",
-        "/api/setup/runtime",
-        "/api/setup/models",
-        "/api/setup/verify",
-        "/api/setup/complete",
-        "/api/setup/retry",
-    ):
-        assert endpoint in content, f"setup.js must call {endpoint}"
-    assert "window.__ClaritySetup" in content
-    # Provisioning state must not travel over Tauri IPC. The wizard used to
-    # listen for setup-progress / setup-complete / setup-error events on a page
-    # served by another origin, where the event bridge is not connected, and the
-    # progress bar then sat at 0% forever.
-    assert "__TAURI__.event" not in content
-    assert "start_setup" not in content
-    assert "'setup-complete'" not in content
+def test_no_setup_api_remains_anywhere():
+    for path in list(STATIC_DIR.rglob("*.js")) + list(STATIC_DIR.rglob("*.html")):
+        content = _read(path)
+        assert "/api/setup/" not in content, f"{path.name} still calls the wizard API"
+    for path in (TAURI_DIR / "src").rglob("*.rs"):
+        assert b"api/setup/" not in path.read_bytes(), f"{path.name} still polls the wizard"
 
 
 # -------------------------------------------------------------------- shell
@@ -198,7 +159,7 @@ def test_capabilities_grant_loopback_pages_only_what_the_ui_calls():
 
 # ------------------------------------------------------------------- served
 
-def test_server_serves_studio_and_wizard_assets():
+def test_server_serves_studio_and_no_longer_serves_a_wizard():
     client = TestClient(create_app())
 
     response = client.get("/")
@@ -206,13 +167,10 @@ def test_server_serves_studio_and_wizard_assets():
     assert "text/html" in response.headers.get("content-type", "")
     assert "desktop-startup-splash" not in response.text
 
-    response = client.get("/static/setup.html")
-    assert response.status_code == 200
-    assert "setup-progress-bar" in response.text
-
-    response_js = client.get("/static/js/setup.js")
-    assert response_js.status_code == 200
-    assert "/api/setup/status" in response_js.text
+    # The wizard is gone: the installer and the boot shell own setup, so the
+    # backend must not serve a wizard page or wizard script anymore.
+    assert client.get("/static/setup.html").status_code == 404
+    assert client.get("/static/js/setup.js").status_code == 404
 
     response_app = client.get("/static/js/app.js")
     assert response_app.status_code == 200
