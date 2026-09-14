@@ -6,13 +6,11 @@
 //! previously it went to `stderr`, which a windowed Windows process has no way
 //! to show, so a failed start looked like a frozen application.
 
-use std::time::Duration;
-
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, navigate_window};
-use crate::process::{self, ChildJob};
+use crate::process;
 use crate::setup;
 use crate::state::AppState;
 
@@ -21,10 +19,7 @@ pub const BOOT_STATUS_EVENT: &str = "boot-status";
 /// Event carrying a fatal boot error.
 pub const BOOT_ERROR_EVENT: &str = "boot-error";
 
-const WIZARD_PORT_START: u16 = 8610;
-const WIZARD_READY_TIMEOUT_SECS: u64 = 60;
 const BACKEND_READY_TIMEOUT_SECS: u64 = 180;
-const WIZARD_POLL_INTERVAL: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Serialize)]
 struct StatusPayload {
@@ -36,12 +31,6 @@ struct ErrorPayload {
     message: String,
     details: String,
     log_dir: String,
-}
-
-/// Only the completion flag matters to the shell; the wizard owns the rest.
-#[derive(Deserialize)]
-struct WizardStatus {
-    complete: bool,
 }
 
 fn report(app: &AppHandle, message: impl Into<String>) {
@@ -148,7 +137,23 @@ async fn launch_studio(app: &AppHandle) -> Result<(), String> {
         .map_err(|err| format!("The studio server is running, but the window could not open it: {err}"))
 }
 
-/// Install an interpreter, run the provisioning wizard, wait for it to finish.
+const BOOT_PROGRESS_EVENT: &str = "boot-progress";
+
+/// Progress for the shell's bar. Deliberately a separate event from
+/// `boot-status`, which carries one-line human text.
+#[derive(Clone, serde::Serialize)]
+struct ProgressPayload {
+    percent: f32,
+    phase: String,
+    message: String,
+}
+
+/// Install the AI engine, or repair an installation that never finished.
+///
+/// The installer already ran this same script; reaching here means it did not
+/// complete (offline install, antivirus, killed download). Running it again
+/// resumes from `setup.json` and adopts an environment that already works, so a
+/// repair never re-downloads what is on disk.
 async fn provision(app: &AppHandle) -> Result<(), String> {
     let (data_dir, resources_dir) = {
         let state = app.state::<AppState>();
@@ -157,12 +162,12 @@ async fn provision(app: &AppHandle) -> Result<(), String> {
             state.resources_dir().to_path_buf(),
         )
     };
-    let handle = app.clone();
 
     report(app, "Installing the Python runtime…");
+    let handle = app.clone();
     let python = setup::ensure_python_runtime(&data_dir, &resources_dir, move |event| {
         let message = if event.speed.trim().is_empty() {
-            event.message
+            event.message.clone()
         } else {
             format!("{} — {}", event.message, event.speed)
         };
@@ -171,97 +176,32 @@ async fn provision(app: &AppHandle) -> Result<(), String> {
     .await
     .map_err(|err| format!("Could not install the Python runtime: {err}"))?;
 
-    report(app, "Preparing first-run setup…");
-    let port = process::find_available_port(WIZARD_PORT_START, 50)
-        .ok_or("No free port was available for the setup wizard")?;
+    report(app, "Installing the AI engine…");
+    let cmd = process::build_provision_command(&python, &data_dir, &resources_dir, "essential", "auto")?;
+    let log_path = data_dir.join("logs").join("provision.log");
+    let handle = app.clone();
 
-    let mut cmd = process::build_bootstrap_command(&python, port, &data_dir, &resources_dir)?;
-    let mut child = cmd
-        .spawn()
-        .map_err(|err| format!("Could not start the setup wizard: {err}"))?;
-    // Bound for the whole function: guarantees the wizard dies with the shell.
-    let _job = ChildJob::attach(&child)?;
-
-    let base_url = format!("http://127.0.0.1:{port}/");
-    wait_for_wizard(app, &base_url, port, &mut child).await?;
-
-    // The wizard is the UI now: it reports its own progress over HTTP, so the
-    // remote page needs no desktop IPC permission to work.
-    navigate_window(app, &base_url)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|err| err.to_string())?;
-    let status_url = format!("{base_url}api/setup/status");
-
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!(
-                "The setup wizard stopped unexpectedly ({status}). See {}",
-                data_dir.join("logs").join("bootstrap.log").display()
-            ));
-        }
-
-        match client.get(&status_url).send().await {
-            Ok(response) if response.status().is_success() => match response
-                .json::<WizardStatus>()
-                .await
-            {
-                Ok(snapshot) if snapshot.complete => break,
-                Ok(_) => {}
-                Err(err) => eprintln!("[clarity] unreadable wizard status: {err}"),
+    setup::run_provisioner(cmd, &log_path, move |event| {
+        let _ = handle.emit(
+            BOOT_PROGRESS_EVENT,
+            ProgressPayload {
+                percent: event.percent,
+                phase: event.stage.clone(),
+                message: event.message.clone(),
             },
-            Ok(response) => eprintln!("[clarity] wizard status returned {}", response.status()),
-            Err(err) => eprintln!("[clarity] wizard status unavailable: {err}"),
+        );
+        if !event.message.trim().is_empty() {
+            report(&handle, event.message.clone());
         }
+    })
+    .await
+    .map_err(|err| format!("{err}\n\nLog: {}", log_path.display()))?;
 
-        tokio::time::sleep(WIZARD_POLL_INTERVAL).await;
+    if !setup::is_setup_complete(&data_dir) {
+        return Err(format!(
+            "Provisioning finished but the runtime is incomplete. See {}",
+            log_path.display()
+        ));
     }
-
-    let _ = child.start_kill();
     Ok(())
-}
-
-/// Wait for the wizard to answer, watching for a process that died at startup
-/// (missing staged sources, unusable interpreter) instead of timing out in
-/// silence and leaving the window on a blank page.
-async fn wait_for_wizard(
-    app: &AppHandle,
-    base_url: &str,
-    port: u16,
-    child: &mut tokio::process::Child,
-) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|err| err.to_string())?;
-    let status_url = format!("{base_url}api/setup/status");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(WIZARD_READY_TIMEOUT_SECS);
-    report(app, "Preparing the setup wizard…");
-
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|err| format!("Failed to poll the setup wizard: {err}"))?
-        {
-            return Err(format!(
-                "The setup wizard exited ({status}) before it started. Check the logs folder in your Clarity data directory."
-            ));
-        }
-
-        if let Ok(response) = client.get(&status_url).send().await {
-            if response.status().is_success() {
-                return Ok(());
-            }
-        }
-
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "The setup wizard did not answer on port {port} within {WIZARD_READY_TIMEOUT_SECS} seconds."
-            ));
-        }
-
-        tokio::time::sleep(Duration::from_millis(400)).await;
-    }
 }

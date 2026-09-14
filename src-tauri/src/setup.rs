@@ -202,7 +202,18 @@ pub fn resolve_project_root(resources_dir: &Path) -> PathBuf {
 }
 
 /// Searches an installation directory for the installed Python executable.
+///
+/// The answer is canonicalised on purpose. `uv python install --install-dir`
+/// stores the runtime in a versioned folder and adds a versionless directory
+/// symlink as an alias; a sorted scan meets the alias first (`-` sorts before
+/// `.`). Passing that alias onwards to `uv venv` makes uv create the venv's
+/// `Scripts/python.exe` link through a reparse point, which Windows refuses with
+/// `ERROR_ACCESS_DENIED` — the failure that looked like a permissions problem.
 pub fn find_python_executable(dir: &Path) -> Option<PathBuf> {
+    find_python_executable_raw(dir).map(canonical_executable)
+}
+
+fn find_python_executable_raw(dir: &Path) -> Option<PathBuf> {
     if !dir.exists() {
         return None;
     }
@@ -220,31 +231,48 @@ pub fn find_python_executable(dir: &Path) -> Option<PathBuf> {
         return Some(scripts_win);
     }
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let cand_win = path.join("python.exe");
-                if cand_win.is_file() {
-                    return Some(cand_win);
-                }
-                let cand_install = path.join("install").join("python.exe");
-                if cand_install.is_file() {
-                    return Some(cand_install);
-                }
-                let cand_scripts = path.join("Scripts").join("python.exe");
-                if cand_scripts.is_file() {
-                    return Some(cand_scripts);
-                }
-                let cand_bin = path.join("bin").join("python");
-                if cand_bin.is_file() {
-                    return Some(cand_bin);
-                }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|read| read.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    // Filesystem order is not stable across platforms; sort so retries match.
+    entries.sort();
+
+    for path in entries {
+        // `.temp` and `.lock` are uv's own staging artefacts, not runtimes.
+        if !path.is_dir() || path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        {
+            continue;
+        }
+        for candidate in [
+            path.join("python.exe"),
+            path.join("install").join("python.exe"),
+            path.join("Scripts").join("python.exe"),
+            path.join("bin").join("python"),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
             }
         }
     }
 
     None
+}
+
+/// Resolve symlinks and junctions, dropping the `\\?\` verb that Windows
+/// `canonicalize` prepends so the path stays usable in argv and error text.
+fn canonical_executable(path: PathBuf) -> PathBuf {
+    let resolved = match std::fs::canonicalize(&path) {
+        Ok(real) => real,
+        Err(_) => return path,
+    };
+    if !resolved.is_file() {
+        return path;
+    }
+    let text = resolved.to_string_lossy().to_string();
+    match text.strip_prefix(r"\\?\") {
+        Some(plain) => PathBuf::from(plain),
+        None => resolved,
+    }
 }
 
 /// Resolves the python executable inside the target virtual environment.
@@ -424,56 +452,35 @@ where
     Ok(())
 }
 
-/// Runs the complete first-run setup orchestrator:
+/// Provisions the standalone Python runtime that the setup wizard needs.
 ///
-/// 1. Creates `%LOCALAPPDATA%\Clarity\{python, env, models}`.
-/// 2. Invokes `uv.exe python install 3.11 --no-bin --install-dir <app_data_dir>/python`.
-/// 3. Invokes `uv.exe venv --allow-existing <app_data_dir>/env --python <installed_python>`.
-/// 4. Invokes `uv.exe pip install` pointing to the project root and appropriate PyTorch index.
-/// 5. Invokes `main.py --download-models essential` to fetch Real-CUGAN and AMT-S weights.
-/// 6. Writes `%LOCALAPPDATA%\Clarity\.setup_complete`.
-pub async fn run_setup<F>(
+/// Everything past this point — venv, dependencies, weights, verification — is
+/// driven by `video_upscaler.desktop` over HTTP, because provisioning is product
+/// logic and the window should not own it. This is the one step the shell must
+/// do itself: it has to happen before any interpreter exists to run the wizard.
+pub async fn ensure_python_runtime(
     app_data_dir: &Path,
     resources_dir: &Path,
-    target: crate::hardware::GpuTarget,
-    on_progress: F,
-) -> Result<(), String>
-where
-    F: Fn(SetupProgressEvent) + Send + Sync + 'static,
-{
+    on_progress: impl Fn(SetupProgressEvent) + Send + Sync + 'static,
+) -> Result<PathBuf, String> {
     let on_progress = Arc::new(on_progress);
-
-    // Step 1: Create directories
     let python_install_dir = app_data_dir.join("python");
-    let env_dir = app_data_dir.join("env");
-    let models_dir = app_data_dir.join("models");
-
     std::fs::create_dir_all(&python_install_dir)
         .map_err(|e| format!("Failed to create python install directory: {}", e))?;
-    std::fs::create_dir_all(&env_dir)
-        .map_err(|e| format!("Failed to create virtual environment directory: {}", e))?;
-    std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("Failed to create models directory: {}", e))?;
 
-    on_progress(SetupProgressEvent {
-        stage: "init".to_string(),
-        percent: 5.0,
-        speed: String::new(),
-        message: "Created runtime and models directories".to_string(),
-    });
+    if let Some(existing) = find_python_executable(&python_install_dir) {
+        on_progress(SetupProgressEvent {
+            stage: "python".to_string(),
+            percent: 100.0,
+            speed: String::new(),
+            message: "Python runtime already installed".to_string(),
+        });
+        return Ok(existing);
+    }
 
     let uv_bin = resolve_uv_bin(resources_dir);
-
-    // Step 2: uv python install 3.11 --no-bin --install-dir <python_install_dir>
-    on_progress(SetupProgressEvent {
-        stage: "python".to_string(),
-        percent: 10.0,
-        speed: String::new(),
-        message: "Downloading and installing Python 3.11 runtime...".to_string(),
-    });
-
-    let mut py_install_cmd = tokio::process::Command::new(&uv_bin);
-    py_install_cmd.args([
+    let mut cmd = tokio::process::Command::new(&uv_bin);
+    cmd.args([
         "python",
         "install",
         "3.11",
@@ -481,90 +488,136 @@ where
         "--install-dir",
         &python_install_dir.to_string_lossy(),
     ]);
+    cmd.env("UV_PYTHON_INSTALL_DIR", &python_install_dir);
+    cmd.env("PYTHONUNBUFFERED", "1");
 
-    run_command_with_progress(py_install_cmd, "python", 10.0, 15.0, on_progress.clone()).await?;
+    run_command_with_progress(cmd, "python", 0.0, 100.0, on_progress).await?;
 
-    // Step 3: uv venv --allow-existing <env_dir> --python <installed_or_discovered_python>
-    on_progress(SetupProgressEvent {
-        stage: "venv".to_string(),
-        percent: 25.0,
-        speed: String::new(),
-        message: "Creating isolated virtual environment...".to_string(),
-    });
+    find_python_executable(&python_install_dir).ok_or_else(|| {
+        format!(
+            "uv reported success but no interpreter was found under {}",
+            python_install_dir.display()
+        )
+    })
+}
 
-    let mut venv_cmd = tokio::process::Command::new(&uv_bin);
-    venv_cmd.args(["venv", "--allow-existing"]).arg(&env_dir);
+/// Parses the provisioner's wire format: `PROGRESS <percent>|<phase>|<message>`.
+pub fn parse_provision_line(line: &str) -> Option<SetupProgressEvent> {
+    let rest = line.trim().strip_prefix("PROGRESS ")?;
+    let mut parts = rest.splitn(3, '|');
+    let percent = parts.next()?.trim().parse::<f32>().ok()?;
+    let stage = parts.next().unwrap_or("").trim().to_string();
+    let message = parts.next().unwrap_or("").trim().to_string();
+    Some(SetupProgressEvent { stage, percent, speed: String::new(), message })
+}
 
-    if let Some(installed_py) = find_python_executable(&python_install_dir) {
-        venv_cmd.arg("--python").arg(&installed_py);
+/// Runs the headless provisioner, mirroring its output to a log and forwarding
+/// progress to the shell.
+///
+/// Kept apart from `run_command_with_progress` on purpose: that one scrapes
+/// percentages out of uv's human-readable output, this one reads a wire format
+/// we control. Sharing a parser would couple the interpreter install to the
+/// engine install for no benefit.
+pub async fn run_provisioner(
+    mut cmd: tokio::process::Command,
+    log_path: &Path,
+    on_event: impl Fn(SetupProgressEvent) + Send + Sync + 'static,
+) -> Result<(), String> {
+    use tokio::io::AsyncBufReadExt;
+
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|e| format!("Cannot write {}: {e}", log_path.display()))?;
+    let log = Arc::new(Mutex::new(log));
+    let tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(16)));
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start provisioning: {e}"))?;
+
+    let on_event = Arc::new(on_event);
+    let mut readers = Vec::new();
+    // stdout and stderr are different types, so box them to a common reader.
+    for pipe in [
+        child.stdout.take().map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+        child.stderr.take().map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let cb = on_event.clone();
+        let log = log.clone();
+        let tail = tail.clone();
+        readers.push(tokio::spawn(async move {
+            use std::io::Write;
+            let mut lines = tokio::io::BufReader::new(pipe).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(mut file) = log.lock() {
+                    let _ = writeln!(file, "{line}");
+                }
+                if let Ok(mut tail) = log_tail_lock(&tail) {
+                    if tail.len() == 16 {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line.clone());
+                }
+                match parse_provision_line(&line) {
+                    Some(event) => cb(event),
+                    None => eprintln!("[clarity:provision] {line}"),
+                }
+            }
+        }));
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("Provisioning process error: {e}"))?;
+    for reader in readers {
+        let _ = reader.await;
+    }
+    if status.success() {
+        return Ok(());
+    }
+
+    // Prefer the provisioner's own ERROR line: it is written for a user to read.
+    let collected: Vec<String> = log_tail_lock(&tail)
+        .map(|t| t.iter().cloned().collect())
+        .unwrap_or_default();
+    let detail = collected
+        .iter()
+        .rev()
+        .find(|line| line.starts_with("ERROR "))
+        .map(|line| line.trim_start_matches("ERROR ").trim().to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| collected.iter().rev().take(6).rev().cloned().collect::<Vec<_>>().join(" | "));
+    Err(if detail.trim().is_empty() {
+        format!("Provisioning stopped with {status}")
     } else {
-        venv_cmd.arg("--python").arg("3.11");
-    }
+        detail
+    })
+}
 
-    venv_cmd.env("UV_PYTHON_INSTALL_DIR", &python_install_dir);
-
-    run_command_with_progress(venv_cmd, "venv", 25.0, 10.0, on_progress.clone()).await?;
-
-    // Step 4: uv pip install into that venv
-    on_progress(SetupProgressEvent {
-        stage: "dependencies".to_string(),
-        percent: 35.0,
-        speed: String::new(),
-        message: "Installing Clarity dependencies and PyTorch...".to_string(),
-    });
-
-    let venv_python = resolve_venv_python(&env_dir);
-    let mut pip_cmd = tokio::process::Command::new(&uv_bin);
-    pip_cmd.args(["pip", "install", "--python", &venv_python.to_string_lossy()]);
-
-    if let crate::hardware::GpuTarget::NvidiaCuda { .. } = target {
-        pip_cmd.args(["--extra-index-url", "https://download.pytorch.org/whl/cu126"]);
-    }
-
-    let project_root = resolve_project_root(resources_dir);
-    pip_cmd.args(["-e", &project_root.to_string_lossy()]);
-
-    run_command_with_progress(pip_cmd, "dependencies", 35.0, 45.0, on_progress.clone()).await?;
-
-    // Step 5: Download essential models
-    on_progress(SetupProgressEvent {
-        stage: "models".to_string(),
-        percent: 80.0,
-        speed: String::new(),
-        message: "Fetching essential AI model weights (Real-CUGAN & AMT-S)...".to_string(),
-    });
-
-    let main_py = project_root.join("main.py");
-    let mut model_cmd = tokio::process::Command::new(&venv_python);
-    if main_py.is_file() {
-        model_cmd.arg(&main_py).args(["--download-models", "essential"]);
-    } else {
-        model_cmd.args(["-m", "video_upscaler.cli", "--download-models", "essential"]);
-    }
-    model_cmd.env("CLARITY_MODELS_DIR", &models_dir);
-    model_cmd.env("PYTHONUNBUFFERED", "1");
-
-    run_command_with_progress(model_cmd, "models", 80.0, 19.0, on_progress.clone()).await?;
-
-    // Step 6: Write marker file .setup_complete
-    let marker = app_data_dir.join(".setup_complete");
-    std::fs::write(&marker, b"1")
-        .map_err(|e| format!("Failed to write setup completion marker: {}", e))?;
-
-    on_progress(SetupProgressEvent {
-        stage: "complete".to_string(),
-        percent: 100.0,
-        speed: String::new(),
-        message: "Setup completed successfully! Ready to launch.".to_string(),
-    });
-
-    Ok(())
+/// Poisoned-mutex-tolerant lock, so a panic in a reader cannot hang startup.
+fn log_tail_lock(tail: &Arc<Mutex<VecDeque<String>>>) -> Result<std::sync::MutexGuard<'_, VecDeque<String>>, ()> {
+    tail.lock().map_err(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hardware::GpuTarget;
     use std::sync::Mutex;
 
     #[test]
@@ -754,7 +807,81 @@ mod tests {
         std::fs::write(&py_bin, b"mock").unwrap();
 
         let found = find_python_executable(&temp_dir);
-        assert_eq!(found, Some(py_bin));
+        assert_eq!(found, Some(canonical_executable(py_bin)));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_find_python_executable_skips_uv_staging_dirs() {
+        let temp_dir = std::env::temp_dir().join("clarity_test_find_python_staging");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let real = temp_dir.join("cpython-3.11.15-windows-x86_64-none");
+        let staging = temp_dir.join(".temp").join("download");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(real.join("python.exe"), b"real").unwrap();
+        // Sorting would not put `.temp` last, and it does hold a python.exe.
+        std::fs::write(staging.join("python.exe"), b"partial").unwrap();
+
+        let found = find_python_executable(&temp_dir);
+        assert_eq!(found, Some(canonical_executable(real.join("python.exe"))));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_canonical_executable_drops_the_windows_verbatim_prefix() {
+        let temp_dir = std::env::temp_dir().join("clarity_test_canonical_python");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let py = temp_dir.join("python.exe");
+        std::fs::write(&py, b"mock").unwrap();
+
+        let resolved = canonical_executable(py.clone());
+        assert!(resolved.is_file(), "canonical path must still exist: {resolved:?}");
+        assert!(
+            !resolved.to_string_lossy().starts_with(r"\\?\"),
+            "uv must not be handed a verbatim path: {resolved:?}"
+        );
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_find_python_executable_resolves_the_versionless_alias() {
+        // uv installs the runtime under the versioned name and adds a symlink
+        // alias without the patch version. Only the real path may reach uv.
+        let temp_dir = std::env::temp_dir().join("clarity_test_alias_python");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let real = temp_dir.join("cpython-3.11.15-windows-x86_64-none");
+        std::fs::create_dir_all(&real).unwrap();
+        let target = real.join("python.exe");
+        std::fs::write(&target, b"mock").unwrap();
+
+        let alias = temp_dir.join("cpython-3.11-windows-x86_64-none");
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(&real, &alias).is_err() {
+                // No developer mode / privilege: nothing to assert here.
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if std::os::unix::fs::symlink(&real, &alias).is_err() {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return;
+            }
+        }
+
+        let found = find_python_executable(&temp_dir).expect("alias interpreter must be found");
+        assert_eq!(
+            canonical_executable(found.clone()),
+            canonical_executable(target),
+            "the alias must resolve to the versioned runtime"
+        );
+        assert!(
+            !found.to_string_lossy().contains("3.11-windows"),
+            "found path is still the alias: {found:?}"
+        );
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
@@ -828,84 +955,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_setup_invalid_binary_fails_with_diagnostics() {
-        let temp_app_data = std::env::temp_dir().join("clarity_test_setup_diag_app_data");
-        let temp_resources = std::env::temp_dir().join("clarity_test_setup_diag_res");
+    async fn test_ensure_python_runtime_reuses_existing_interpreter() {
+        let temp_app_data = std::env::temp_dir().join("clarity_setup_reuse_app_data");
+        let temp_resources = std::env::temp_dir().join("clarity_setup_reuse_res");
         let _ = std::fs::remove_dir_all(&temp_app_data);
         let _ = std::fs::remove_dir_all(&temp_resources);
         std::fs::create_dir_all(&temp_app_data).unwrap();
         std::fs::create_dir_all(&temp_resources).unwrap();
 
-        // Create an invalid dummy executable that fails
-        let fake_uv = if cfg!(windows) {
-            temp_resources.join("uv.exe")
-        } else {
-            temp_resources.join("uv")
-        };
-        std::fs::write(&fake_uv, b"not_an_executable").unwrap();
-
-        let res = run_setup(
-            &temp_app_data,
-            &temp_resources,
-            GpuTarget::CpuFallback,
-            |_evt| {},
+        // A real interpreter is already there: uv must not be invoked at all, so
+        // even a garbage uv cannot break a relaunch.
+        let python_dir = temp_app_data.join("python");
+        std::fs::create_dir_all(&python_dir).unwrap();
+        let existing = python_dir.join(if cfg!(windows) { "python.exe" } else { "python" });
+        std::fs::write(&existing, b"").unwrap();
+        std::fs::write(
+            if cfg!(windows) { temp_resources.join("uv.exe") } else { temp_resources.join("uv") },
+            b"not_an_executable",
         )
-        .await;
+        .unwrap();
 
-        assert!(res.is_err());
-        let err_msg = res.unwrap_err();
-        // Error message should identify the failure
-        assert!(
-            err_msg.contains("failed") || err_msg.contains("Failed"),
-            "Expected failure message, got: {}",
-            err_msg
-        );
-
-        // Verify directories were created
-        assert!(temp_app_data.join("python").is_dir());
-        assert!(temp_app_data.join("env").is_dir());
-        assert!(temp_app_data.join("models").is_dir());
-        // Verify setup marker was NOT written on failure
-        assert!(!temp_app_data.join(".setup_complete").exists());
+        let res = ensure_python_runtime(&temp_app_data, &temp_resources, |_evt| {}).await;
+        assert_eq!(res.as_deref(), Ok(existing.as_path()));
 
         let _ = std::fs::remove_dir_all(&temp_app_data);
         let _ = std::fs::remove_dir_all(&temp_resources);
     }
 
     #[tokio::test]
-    async fn test_run_setup_retry_venv_allow_existing() {
-        let temp_app_data = std::env::temp_dir().join("clarity_test_setup_retry_app_data");
-        let temp_resources = std::env::temp_dir().join("clarity_test_setup_retry_res");
+    async fn test_ensure_python_runtime_fails_with_diagnostics() {
+        let temp_app_data = std::env::temp_dir().join("clarity_setup_fail_app_data");
+        let temp_resources = std::env::temp_dir().join("clarity_setup_fail_res");
         let _ = std::fs::remove_dir_all(&temp_app_data);
         let _ = std::fs::remove_dir_all(&temp_resources);
         std::fs::create_dir_all(&temp_app_data).unwrap();
         std::fs::create_dir_all(&temp_resources).unwrap();
 
-        // Pre-create the env directory simulating a prior partial run
-        let existing_env = temp_app_data.join("env");
-        std::fs::create_dir_all(&existing_env).unwrap();
-        std::fs::write(existing_env.join("partial.txt"), b"dummy").unwrap();
-
-        let fake_uv = if cfg!(windows) {
-            temp_resources.join("uv.exe")
-        } else {
-            temp_resources.join("uv")
-        };
-        std::fs::write(&fake_uv, b"not_a_binary").unwrap();
-
-        let res = run_setup(
-            &temp_app_data,
-            &temp_resources,
-            GpuTarget::CpuFallback,
-            |_evt| {},
+        std::fs::write(
+            if cfg!(windows) { temp_resources.join("uv.exe") } else { temp_resources.join("uv") },
+            b"not_an_executable",
         )
-        .await;
+        .unwrap();
 
-        assert!(res.is_err());
-        // Ensure existing env was preserved and not broken by directory creation
-        assert!(existing_env.join("partial.txt").exists());
+        let res = ensure_python_runtime(&temp_app_data, &temp_resources, |_evt| {}).await;
+        assert!(res.is_err(), "expected failure, got {:?}", res);
+        assert!(temp_app_data.join("python").is_dir(), "install dir must exist");
+        // No runtime, no marker: the wizard must stay reachable afterwards.
+        assert!(!temp_app_data.join(".setup_complete").exists());
 
         let _ = std::fs::remove_dir_all(&temp_app_data);
         let _ = std::fs::remove_dir_all(&temp_resources);
+    }
+
+    #[test]
+    fn test_parse_provision_line() {
+        let event = parse_provision_line("PROGRESS 42.5|dependencies|Downloading torch").unwrap();
+        assert_eq!(event.percent, 42.5);
+        assert_eq!(event.stage, "dependencies");
+        assert_eq!(event.message, "Downloading torch");
+        assert!(event.speed.is_empty());
+    }
+
+    #[test]
+    fn test_parse_provision_line_ignores_noise() {
+        // uv's own output is interleaved with the wire format; only the wire
+        // format carries progress, and everything else must not be mistaken for it.
+        assert!(parse_provision_line("Resolved 41 packages").is_none());
+        assert!(parse_provision_line("PROGRESS not-a-number|x|y").is_none());
+        assert!(parse_provision_line("").is_none());
+    }
+
+    #[test]
+    fn test_parse_provision_line_tolerates_a_missing_message() {
+        let event = parse_provision_line("PROGRESS 7|gpu|").unwrap();
+        assert_eq!(event.percent, 7.0);
+        assert_eq!(event.stage, "gpu");
+        assert_eq!(event.message, "");
     }
 }

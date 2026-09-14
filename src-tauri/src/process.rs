@@ -31,47 +31,56 @@ pub fn find_available_port(start: u16, max_attempts: u16) -> Option<u16> {
     None
 }
 
-/// Resolves the Python executable to run.
+/// Resolves the Python interpreter used to run the studio backend.
 ///
 /// Priority:
-/// 1. `%LOCALAPPDATA%\Clarity\env\Scripts\python.exe` (production isolated venv)
-/// 2. `.venv\Scripts\python.exe` (project root development venv)
-/// 3. `..\.venv\Scripts\python.exe` (development venv relative to src-tauri)
-/// 4. `%VIRTUAL_ENV%\Scripts\python.exe` (active shell venv if set)
-/// 5. System `"python.exe"` fallback
-pub fn resolve_python_path(app_data_dir: &Path) -> PathBuf {
+/// 1. `%LOCALAPPDATA%\Clarity\env\Scripts\python.exe` (provisioned by first-run setup)
+/// 2. `.venv\Scripts\python.exe` / `..\.venv\...` (repository development venv)
+/// 3. `%VIRTUAL_ENV%\Scripts\python.exe` (active shell venv)
+///
+/// `None` means the environment has not been provisioned: the caller must run
+/// the setup wizard rather than launch a process that cannot import its own
+/// dependencies and then time out for no apparent reason.
+pub fn resolve_python_path(app_data_dir: &Path) -> Option<PathBuf> {
     let installed_env = app_data_dir.join("env").join("Scripts").join("python.exe");
     if installed_env.exists() {
-        return installed_env;
+        return Some(installed_env);
     }
 
-    let dev_venv = Path::new(".venv").join("Scripts").join("python.exe");
-    if dev_venv.exists() {
-        return dev_venv;
-    }
-
-    let parent_dev_venv = Path::new("..").join(".venv").join("Scripts").join("python.exe");
-    if parent_dev_venv.exists() {
-        return parent_dev_venv;
+    for dev_venv in [
+        PathBuf::from(".venv").join("Scripts").join("python.exe"),
+        PathBuf::from("..").join(".venv").join("Scripts").join("python.exe"),
+    ] {
+        if dev_venv.exists() {
+            return Some(dev_venv);
+        }
     }
 
     if let Ok(venv_val) = std::env::var("VIRTUAL_ENV") {
         let venv_python = PathBuf::from(venv_val).join("Scripts").join("python.exe");
         if venv_python.exists() {
-            return venv_python;
+            return Some(venv_python);
         }
     }
 
-    PathBuf::from("python.exe")
+    None
+}
+
+/// Location of the studio backend log for a given data directory.
+pub fn backend_log_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("logs").join("backend.log")
 }
 
 /// Builds the backend `tokio::process::Command` with all required flags and environment variables.
+///
+/// Output is appended to `<data>/logs/backend.log`; with the console hidden there
+/// is nowhere else for a startup crash to go.
 pub fn build_backend_command(
     python_bin: &Path,
     port: u16,
     app_data_dir: &Path,
     resources_dir: &Path,
-) -> tokio::process::Command {
+) -> Result<tokio::process::Command, String> {
     let mut cmd = tokio::process::Command::new(python_bin);
 
     cmd.args([
@@ -80,6 +89,10 @@ pub fn build_backend_command(
         "--port",
         &port.to_string(),
         "--no-browser",
+        // The shell reserved this exact port and is polling it. Without this the
+        // server silently drifts to the next free port and the shell waits on a
+        // dead one.
+        "--strict-port",
     ]);
 
     // Prepend resources_dir to PATH so bundled ffmpeg.exe and ffprobe.exe are found immediately
@@ -91,14 +104,42 @@ pub fn build_backend_command(
     };
     cmd.env("PATH", new_path);
 
-    // Isolated models directory and desktop mode flag
-    cmd.env("CLARITY_MODELS_DIR", app_data_dir.join("models"));
+    // Prepend resources_dir and resources_dir/src to PYTHONPATH so video_upscaler is always discoverable
+    let current_pypath = std::env::var("PYTHONPATH").unwrap_or_default();
+    let src_dir = resources_dir.join("src");
+    let new_pypath = if current_pypath.is_empty() {
+        format!("{};{}", src_dir.display(), resources_dir.display())
+    } else {
+        format!("{};{};{}", src_dir.display(), resources_dir.display(), current_pypath)
+    };
+    cmd.env("PYTHONPATH", new_pypath);
+
+    // One variable owns the whole writable layout (input/output/models/tools/cache),
+    // so the shell and the app cannot disagree about where user media lives.
+    cmd.env("CLARITY_DATA_DIR", app_data_dir);
     cmd.env("CLARITY_DESKTOP_MODE", "1");
+    cmd.env("CLARITY_FFMPEG", resources_dir.join("ffmpeg.exe"));
+    cmd.env("CLARITY_FFPROBE", resources_dir.join("ffprobe.exe"));
+
+    let log_path = backend_log_path(app_data_dir);
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create log directory: {e}"))?;
+    }
+    let logfile = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to open backend log {log_path:?}: {e}"))?;
+    cmd.stdout(std::process::Stdio::from(logfile));
+    cmd.stderr(std::process::Stdio::from(
+        std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
+            .map_err(|e| format!("Failed to open backend log {log_path:?}: {e}"))?,
+    ));
 
     // Hide console window on Windows (CREATE_NO_WINDOW = 0x08000000)
     cmd.creation_flags(0x08000000);
 
-    cmd
+    Ok(cmd)
 }
 
 /// Creates a Windows Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
@@ -132,10 +173,104 @@ pub fn create_kill_on_close_job() -> Result<HANDLE, String> {
     }
 }
 
+/// Builds the command that provisions the AI engine.
+///
+/// The installer runs the exact same script with the exact same arguments, so
+/// there is one implementation of "install Clarity" and no way for the two to
+/// disagree about what a complete install contains.
+pub fn build_provision_command(
+    python_bin: &Path,
+    app_data_dir: &Path,
+    resources_dir: &Path,
+    tier: &str,
+    tensorrt: &str,
+) -> Result<tokio::process::Command, String> {
+    let script = resources_dir
+        .join("src")
+        .join("video_upscaler")
+        .join("desktop")
+        .join("provision.py");
+    if !script.is_file() {
+        return Err(format!(
+            "The provisioning script is missing: {}. The installation is incomplete — reinstall Clarity.",
+            script.display()
+        ));
+    }
+
+    let mut cmd = tokio::process::Command::new(python_bin);
+    cmd.args([
+        "-u",
+        &script.to_string_lossy(),
+        "--data-dir",
+        &app_data_dir.to_string_lossy(),
+        "--resources-dir",
+        &resources_dir.to_string_lossy(),
+        "--tier",
+        tier,
+        "--tensorrt",
+        tensorrt,
+    ]);
+
+    // PYTHONPATH so `import video_upscaler` resolves from the staged sources.
+    cmd.env("PYTHONPATH", resources_dir.join("src"));
+    cmd.env("PYTHONUNBUFFERED", "1");
+    cmd.env("CLARITY_DATA_DIR", app_data_dir);
+    cmd.env("CLARITY_DESKTOP_MODE", "1");
+    Ok(cmd)
+}
+
+/// A Job Object that kills everything assigned to it when dropped. Used for
+/// short-lived helpers (the setup wizard) that outlive their own command.
+pub struct ChildJob {
+    job_handle: HANDLE,
+}
+
+// SAFETY: the only state is a kernel job-object handle. Kernel handles may be
+// used and closed from any thread of the owning process and this type holds no
+// reference into process memory, so moving it across an await point is sound.
+// Without this the boot future is not `Send` and Tauri's async runtime refuses
+// to spawn it.
+unsafe impl Send for ChildJob {}
+
+impl ChildJob {
+    /// Creates a kill-on-close job and assigns `child` to it.
+    pub fn attach(child: &tokio::process::Child) -> Result<Self, String> {
+        let job_handle = create_kill_on_close_job()?;
+        let raw = match child.raw_handle() {
+            Some(h) => h as HANDLE,
+            None => {
+                unsafe { CloseHandle(job_handle) };
+                return Err("Failed to obtain raw handle from child process".to_string());
+            }
+        };
+
+        if unsafe { AssignProcessToJobObject(job_handle, raw) } == 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { CloseHandle(job_handle) };
+            return Err(format!("AssignProcessToJobObject failed: {err}"));
+        }
+
+        Ok(Self { job_handle })
+    }
+}
+
+impl Drop for ChildJob {
+    fn drop(&mut self) {
+        if !self.job_handle.is_null() {
+            unsafe {
+                TerminateJobObject(self.job_handle, 0);
+                CloseHandle(self.job_handle);
+            }
+            self.job_handle = std::ptr::null_mut();
+        }
+    }
+}
+
 pub struct BackendProcessManager {
     job_handle: HANDLE,
     child: tokio::process::Child,
     pub port: u16,
+    pub log_path: PathBuf,
 }
 
 // HANDLE is an OS-level pointer that can safely be moved across threads.
@@ -150,10 +285,18 @@ impl BackendProcessManager {
         app_data_dir: &Path,
         resources_dir: &Path,
     ) -> Result<Self, String> {
-        let python_bin = resolve_python_path(app_data_dir);
+        let python_bin = match resolve_python_path(app_data_dir) {
+            Some(path) => path,
+            None => {
+                return Err(
+                    "The Clarity runtime is not provisioned yet — run first-time setup first.".to_string(),
+                )
+            }
+        };
         let job_handle = create_kill_on_close_job()?;
 
-        let mut cmd = build_backend_command(&python_bin, port, app_data_dir, resources_dir);
+        let mut cmd = build_backend_command(&python_bin, port, app_data_dir, resources_dir)?;
+        let log_path = backend_log_path(app_data_dir);
 
         let child = match cmd.spawn() {
             Ok(c) => c,
@@ -193,42 +336,53 @@ impl BackendProcessManager {
             job_handle,
             child,
             port,
+            log_path,
         })
     }
 
-    /// Polls `http://127.0.0.1:{port}/api/system/info` until it returns 200 OK or times out.
-    pub async fn wait_for_port_ready(port: u16, timeout_secs: u64) -> Result<(), String> {
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_millis(500))
+    /// Polls `http://127.0.0.1:{port}/api/health` until it answers, the backend
+    /// process dies, or the timeout elapses.
+    ///
+    /// `/api/health` is used rather than `/api/system/info` on purpose: the
+    /// latter imports torch and probes the GPU, so on a cold install it can take
+    /// longer than the whole readiness budget and report a healthy server dead.
+    pub async fn wait_until_ready(&mut self, timeout_secs: u64) -> Result<(), String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
             .build()
-        {
-            Ok(c) => c,
-            Err(e) => return Err(format!("Failed to build HTTP client: {}", e)),
-        };
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
-        let url = format!("http://127.0.0.1:{}/api/system/info", port);
+        let url = format!("http://127.0.0.1:{}/api/health", self.port);
+        let log_path = self.log_path.display().to_string();
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(timeout_secs);
-        let poll_interval = Duration::from_millis(200);
 
-        while start.elapsed() < timeout {
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .map_err(|e| format!("Failed to poll backend process: {e}"))?
+            {
+                return Err(format!(
+                    "The Clarity server exited ({status}) before it was ready. See {log_path}"
+                ));
+            }
+
             if let Ok(resp) = client.get(&url).send().await {
                 if resp.status().is_success() {
                     return Ok(());
                 }
             }
-            tokio::time::sleep(poll_interval).await;
+
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "The Clarity server did not answer on {} within {} seconds. See {log_path}",
+                    self.port, timeout_secs
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
-
-        Err(format!(
-            "Backend process failed to respond at {} within {} seconds",
-            url, timeout_secs
-        ))
-    }
-
-    /// Polls `http://127.0.0.1:{port}/api/system/info` until it returns 200 OK or times out.
-    pub async fn wait_until_ready(&self, timeout_secs: u64) -> Result<(), String> {
-        Self::wait_for_port_ready(self.port, timeout_secs).await
     }
 
     /// Terminates the backend process and closes the associated Job Object handle.
@@ -253,6 +407,7 @@ impl Drop for BackendProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener as TokioTcpListener;
 
@@ -311,20 +466,26 @@ mod tests {
         std::fs::write(&python_exe, b"").unwrap();
 
         let resolved = resolve_python_path(&temp_dir);
-        assert_eq!(resolved, python_exe);
+        assert_eq!(resolved, Some(python_exe));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
-    fn test_resolve_python_path_fallback() {
-        let non_existent = Path::new("C:\\non_existent_clarity_path_12345");
-        let resolved = resolve_python_path(non_existent);
-        assert!(
-            resolved.ends_with("python.exe") || resolved == PathBuf::from("python"),
-            "Resolved path was: {:?}",
-            resolved
-        );
+    fn test_resolve_python_path_without_provisioned_env() {
+        // No env/ directory: only the repository development venvs may match, and
+        // a bare temp dir must never silently fall back to "python.exe" on PATH —
+        // that interpreter cannot import the app, which used to surface as a
+        // readiness timeout with no explanation.
+        let non_existent = std::env::temp_dir().join(format!("clarity_absent_{}", std::process::id()));
+        match resolve_python_path(&non_existent) {
+            None => {}
+            Some(path) => assert!(
+                path.to_string_lossy().contains(".venv") || path.to_string_lossy().contains("VIRTUAL_ENV"),
+                "unexpected interpreter: {:?}",
+                path
+            ),
+        }
     }
 
     #[test]
@@ -338,11 +499,15 @@ mod tests {
 
     #[test]
     fn test_build_backend_command_properties() {
+        let temp_dir = std::env::temp_dir().join(format!("clarity_cmd_env_{}", std::process::id()));
         let python = Path::new("python.exe");
-        let app_data = Path::new("C:\\ClarityData");
+        let app_data = temp_dir.as_path();
         let resources = Path::new("C:\\ClarityResources");
 
-        let cmd = build_backend_command(python, 7865, app_data, resources);
+        let cmd = build_backend_command(python, 7865, app_data, resources).expect("build command");
+        // The log file handle must be created under the data directory.
+        assert!(backend_log_path(app_data).parent().unwrap().is_dir());
+
         let std_cmd = cmd.as_std();
 
         let args: Vec<&std::ffi::OsStr> = std_cmd.get_args().collect();
@@ -351,6 +516,10 @@ mod tests {
         assert_eq!(args[2], "--port");
         assert_eq!(args[3], "7865");
         assert_eq!(args[4], "--no-browser");
+        assert_eq!(
+            args[5], "--strict-port",
+            "backend must bind the reserved port or fail loudly"
+        );
 
         let envs: std::collections::HashMap<_, _> = std_cmd
             .get_envs()
@@ -362,8 +531,12 @@ mod tests {
             Some(&std::ffi::OsString::from("1"))
         );
         assert_eq!(
-            envs.get(std::ffi::OsStr::new("CLARITY_MODELS_DIR")),
-            Some(&std::ffi::OsString::from(app_data.join("models")))
+            envs.get(std::ffi::OsStr::new("CLARITY_DATA_DIR")),
+            Some(&std::ffi::OsString::from(app_data))
+        );
+        assert!(
+            envs.contains_key(std::ffi::OsStr::new("CLARITY_FFMPEG")),
+            "bundled ffmpeg must be pinned by absolute path"
         );
 
         let path_val = envs
@@ -378,7 +551,7 @@ mod tests {
         let listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        // Spawn mock HTTP server responding 200 OK to /api/system/info
+        // Spawn mock HTTP server responding 200 OK to /api/health
         tokio::spawn(async move {
             if let Ok((mut socket, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];
@@ -390,18 +563,49 @@ mod tests {
         });
 
         let dummy_child = tokio::process::Command::new("cmd")
-            .args(["/c", "exit 0"])
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
             .spawn()
             .unwrap();
 
-        let manager = BackendProcessManager {
+        let mut manager = BackendProcessManager {
             job_handle: std::ptr::null_mut(),
             child: dummy_child,
             port,
+            log_path: backend_log_path(std::env::temp_dir().as_path()),
         };
 
         let res = manager.wait_until_ready(5).await;
         assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wait_until_ready_detects_early_exit() {
+        // A backend that dies at startup must be reported immediately, with the
+        // log path, instead of burning the whole readiness timeout.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let free_port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let dummy_child = tokio::process::Command::new("cmd")
+            .args(["/c", "exit 3"])
+            .spawn()
+            .unwrap();
+
+        let mut manager = BackendProcessManager {
+            job_handle: std::ptr::null_mut(),
+            child: dummy_child,
+            port: free_port,
+            log_path: backend_log_path(std::env::temp_dir().as_path()),
+        };
+
+        let start = std::time::Instant::now();
+        let err = manager
+            .wait_until_ready(30)
+            .await
+            .expect_err("exited process is never ready");
+        assert!(start.elapsed() < Duration::from_secs(10), "error was too slow: {err}");
+        assert!(err.contains("exited"), "unexpected message: {err}");
+        assert!(err.contains("backend.log"), "error must name the log: {err}");
     }
 
     #[tokio::test]
@@ -420,6 +624,7 @@ mod tests {
             job_handle: std::ptr::null_mut(),
             child: dummy_child,
             port: free_port,
+            log_path: backend_log_path(std::env::temp_dir().as_path()),
         };
 
         let start = std::time::Instant::now();
@@ -448,6 +653,7 @@ mod tests {
             job_handle: job,
             child,
             port: 7860,
+            log_path: backend_log_path(std::env::temp_dir().as_path()),
         };
 
         assert!(!manager.job_handle.is_null());
@@ -457,5 +663,49 @@ mod tests {
         // Second terminate call should be safe / idempotent
         manager.terminate();
         assert!(manager.job_handle.is_null());
+    }
+
+    #[test]
+    fn test_build_provision_command_targets_the_script_and_pins_the_data_dir() {
+        let root = std::env::temp_dir().join("clarity_provision_cmd");
+        let _ = std::fs::remove_dir_all(&root);
+        let resources = root.join("resources");
+        std::fs::create_dir_all(resources.join("src").join("video_upscaler").join("desktop")).unwrap();
+        std::fs::write(
+            resources.join("src").join("video_upscaler").join("desktop").join("provision.py"),
+            b"",
+        ).unwrap();
+        let data = root.join("data");
+
+        let cmd = build_provision_command(
+            Path::new("python.exe"), &data, &resources, "essential", "auto",
+        ).expect("command");
+        let argv: Vec<String> = cmd.as_std().get_args().map(|a| a.to_string_lossy().to_string()).collect();
+
+        assert_eq!(argv[0], "-u");
+        assert!(argv[1].ends_with("provision.py"));
+        assert!(argv.contains(&"--data-dir".to_string()));
+        assert!(argv.contains(&data.to_string_lossy().to_string()));
+        assert!(argv.contains(&"--tensorrt".to_string()));
+        assert!(argv.contains(&"auto".to_string()));
+        assert_eq!(
+            cmd.as_std().get_envs().find(|(k, _)| *k == "CLARITY_DATA_DIR").unwrap().1.unwrap(),
+            std::ffi::OsStr::new(data.as_os_str())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_build_provision_command_refuses_a_missing_script() {
+        let root = std::env::temp_dir().join("clarity_provision_cmd_missing");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let err = build_provision_command(
+            Path::new("python.exe"), &root, &root, "essential", "auto",
+        ).unwrap_err();
+
+        assert!(err.contains("provision.py"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
