@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Progress event emitted during environment provisioning and setup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -9,6 +11,31 @@ pub struct SetupProgressEvent {
     pub percent: f32,
     pub speed: String,
     pub message: String,
+}
+
+/// Thread-safe monotonic progress tracker that prevents progress percentage regressions.
+#[derive(Debug)]
+pub struct MonotonicProgressTracker {
+    max_millipct: AtomicU32,
+}
+
+impl MonotonicProgressTracker {
+    pub fn new(initial_pct: f32) -> Self {
+        Self {
+            max_millipct: AtomicU32::new((initial_pct * 1000.0).max(0.0) as u32),
+        }
+    }
+
+    pub fn update(&self, new_pct: f32) -> f32 {
+        let new_milli = (new_pct * 1000.0).max(0.0) as u32;
+        self.max_millipct.fetch_max(new_milli, Ordering::SeqCst);
+        let max_val = self.max_millipct.load(Ordering::SeqCst);
+        (max_val as f32) / 1000.0
+    }
+
+    pub fn current(&self) -> f32 {
+        (self.max_millipct.load(Ordering::SeqCst) as f32) / 1000.0
+    }
 }
 
 /// Checks whether the Python environment and setup have already been completed.
@@ -127,6 +154,11 @@ pub fn resolve_project_root(resources_dir: &Path) -> PathBuf {
         if parent.join("pyproject.toml").is_file() {
             return parent.to_path_buf();
         }
+        if let Some(grandparent) = parent.parent() {
+            if grandparent.join("pyproject.toml").is_file() {
+                return grandparent.to_path_buf();
+            }
+        }
     }
     if Path::new("pyproject.toml").is_file() {
         return PathBuf::from(".");
@@ -141,6 +173,11 @@ pub fn resolve_project_root(resources_dir: &Path) -> PathBuf {
         if let Some(parent) = current_dir.parent() {
             if parent.join("pyproject.toml").is_file() {
                 return parent.to_path_buf();
+            }
+            if let Some(grandparent) = parent.parent() {
+                if grandparent.join("pyproject.toml").is_file() {
+                    return grandparent.to_path_buf();
+                }
             }
         }
     }
@@ -211,11 +248,16 @@ pub fn resolve_venv_python(env_dir: &Path) -> PathBuf {
 }
 
 /// Processes an async stream, parsing `\r` and `\n` delimited output lines in real-time.
+///
+/// Employs `tracker` to guarantee monotonically increasing progress, and retains recent
+/// output lines in `output_history` for diagnostics on failure.
 pub async fn process_stream<R, F>(
     mut reader: R,
     stage: &str,
     base_pct: f32,
     scale_pct: f32,
+    tracker: Arc<MonotonicProgressTracker>,
+    output_history: Arc<Mutex<VecDeque<String>>>,
     on_progress: Arc<F>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
@@ -234,19 +276,30 @@ pub async fn process_stream<R, F>(
             if ch == '\n' || ch == '\r' {
                 let trimmed = line_buf.trim();
                 if !trimmed.is_empty() {
+                    {
+                        let mut history = output_history.lock().unwrap();
+                        if history.len() >= 15 {
+                            history.pop_front();
+                        }
+                        history.push_back(trimmed.to_string());
+                    }
+
                     if let Some((uv_pct, speed)) = parse_uv_progress_line(trimmed) {
                         let mapped_pct =
                             base_pct + (uv_pct.clamp(0.0, 100.0) / 100.0) * scale_pct;
+                        let rounded = (mapped_pct * 10.0).round() / 10.0;
+                        let pct = tracker.update(rounded);
                         on_progress(SetupProgressEvent {
                             stage: stage.to_string(),
-                            percent: (mapped_pct * 10.0).round() / 10.0,
+                            percent: pct,
                             speed,
                             message: trimmed.to_string(),
                         });
                     } else {
+                        let pct = tracker.current();
                         on_progress(SetupProgressEvent {
                             stage: stage.to_string(),
-                            percent: base_pct,
+                            percent: pct,
                             speed: String::new(),
                             message: trimmed.to_string(),
                         });
@@ -261,11 +314,21 @@ pub async fn process_stream<R, F>(
 
     let trimmed = line_buf.trim();
     if !trimmed.is_empty() {
+        {
+            let mut history = output_history.lock().unwrap();
+            if history.len() >= 15 {
+                history.pop_front();
+            }
+            history.push_back(trimmed.to_string());
+        }
+
         if let Some((uv_pct, speed)) = parse_uv_progress_line(trimmed) {
             let mapped_pct = base_pct + (uv_pct.clamp(0.0, 100.0) / 100.0) * scale_pct;
+            let rounded = (mapped_pct * 10.0).round() / 10.0;
+            let pct = tracker.update(rounded);
             on_progress(SetupProgressEvent {
                 stage: stage.to_string(),
-                percent: (mapped_pct * 10.0).round() / 10.0,
+                percent: pct,
                 speed,
                 message: trimmed.to_string(),
             });
@@ -300,19 +363,26 @@ where
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
+    let tracker = Arc::new(MonotonicProgressTracker::new(base_pct));
+    let output_history = Arc::new(Mutex::new(VecDeque::with_capacity(16)));
+
     let p1 = on_progress.clone();
     let s1 = stage.to_string();
+    let t1 = tracker.clone();
+    let h1 = output_history.clone();
     let stdout_handle = tokio::spawn(async move {
         if let Some(reader) = stdout {
-            process_stream(reader, &s1, base_pct, scale_pct, p1).await;
+            process_stream(reader, &s1, base_pct, scale_pct, t1, h1, p1).await;
         }
     });
 
     let p2 = on_progress.clone();
     let s2 = stage.to_string();
+    let t2 = tracker.clone();
+    let h2 = output_history.clone();
     let stderr_handle = tokio::spawn(async move {
         if let Some(reader) = stderr {
-            process_stream(reader, &s2, base_pct, scale_pct, p2).await;
+            process_stream(reader, &s2, base_pct, scale_pct, t2, h2, p2).await;
         }
     });
 
@@ -320,10 +390,17 @@ where
     let status = status.map_err(|e| format!("Failed to wait on stage '{}': {}", stage, e))?;
 
     if !status.success() {
+        let history = output_history.lock().unwrap();
+        let diagnostic = if history.is_empty() {
+            "No diagnostic output recorded.".to_string()
+        } else {
+            history.iter().cloned().collect::<Vec<_>>().join("\n  ")
+        };
         return Err(format!(
-            "Stage '{}' command failed with exit code: {:?}",
+            "Stage '{}' command failed with exit code: {:?}.\nRecent output:\n  {}",
             stage,
-            status.code()
+            status.code(),
+            diagnostic
         ));
     }
 
@@ -333,8 +410,8 @@ where
 /// Runs the complete first-run setup orchestrator:
 ///
 /// 1. Creates `%LOCALAPPDATA%\Clarity\{python, env, models}`.
-/// 2. Invokes `uv.exe python install 3.11 --install-dir <app_data_dir>/python`.
-/// 3. Invokes `uv.exe venv <app_data_dir>/env --python <installed_python>`.
+/// 2. Invokes `uv.exe python install 3.11 --no-bin --install-dir <app_data_dir>/python`.
+/// 3. Invokes `uv.exe venv --allow-existing <app_data_dir>/env --python <installed_python>`.
 /// 4. Invokes `uv.exe pip install` pointing to the project root and appropriate PyTorch index.
 /// 5. Invokes `main.py --download-models essential` to fetch Real-CUGAN and AMT-S weights.
 /// 6. Writes `%LOCALAPPDATA%\Clarity\.setup_complete`.
@@ -370,7 +447,7 @@ where
 
     let uv_bin = resolve_uv_bin(resources_dir);
 
-    // Step 2: uv python install 3.11 --install-dir <python_install_dir>
+    // Step 2: uv python install 3.11 --no-bin --install-dir <python_install_dir>
     on_progress(SetupProgressEvent {
         stage: "python".to_string(),
         percent: 10.0,
@@ -383,13 +460,14 @@ where
         "python",
         "install",
         "3.11",
+        "--no-bin",
         "--install-dir",
         &python_install_dir.to_string_lossy(),
     ]);
 
     run_command_with_progress(py_install_cmd, "python", 10.0, 15.0, on_progress.clone()).await?;
 
-    // Step 3: uv venv <env_dir> --python <installed_or_discovered_python>
+    // Step 3: uv venv --allow-existing <env_dir> --python <installed_or_discovered_python>
     on_progress(SetupProgressEvent {
         stage: "venv".to_string(),
         percent: 25.0,
@@ -398,7 +476,7 @@ where
     });
 
     let mut venv_cmd = tokio::process::Command::new(&uv_bin);
-    venv_cmd.arg("venv").arg(&env_dir);
+    venv_cmd.args(["venv", "--allow-existing"]).arg(&env_dir);
 
     if let Some(installed_py) = find_python_executable(&python_install_dir) {
         venv_cmd.arg("--python").arg(&installed_py);
@@ -447,6 +525,7 @@ where
         model_cmd.args(["-m", "video_upscaler.cli", "--download-models", "essential"]);
     }
     model_cmd.env("CLARITY_MODELS_DIR", &models_dir);
+    model_cmd.env("PYTHONUNBUFFERED", "1");
 
     run_command_with_progress(model_cmd, "models", 80.0, 19.0, on_progress.clone()).await?;
 
@@ -484,6 +563,24 @@ mod tests {
         let deserialized: SetupProgressEvent =
             serde_json::from_str(&json).expect("deserialize event");
         assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_monotonic_progress_tracker() {
+        let tracker = MonotonicProgressTracker::new(10.0);
+        assert_eq!(tracker.current(), 10.0);
+
+        // Advance to 35.5
+        assert_eq!(tracker.update(35.5), 35.5);
+        assert_eq!(tracker.current(), 35.5);
+
+        // Attempt regression to 20.0 - should remain at 35.5
+        assert_eq!(tracker.update(20.0), 35.5);
+        assert_eq!(tracker.current(), 35.5);
+
+        // Advance to 75.0
+        assert_eq!(tracker.update(75.0), 75.0);
+        assert_eq!(tracker.current(), 75.0);
     }
 
     #[test]
@@ -598,6 +695,20 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_project_root_grandparent_resolution() {
+        let temp_root = std::env::temp_dir().join("clarity_test_grandparent_root");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let nested_resources = temp_root.join("src-tauri").join("resources");
+        std::fs::create_dir_all(&nested_resources).unwrap();
+        std::fs::write(temp_root.join("pyproject.toml"), b"# dummy").unwrap();
+
+        let resolved = resolve_project_root(&nested_resources);
+        assert_eq!(resolved, temp_root);
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
     fn test_resolve_uv_bin_returns_valid_or_fallback() {
         let uv_path = resolve_uv_bin(Path::new("non_existent_resources"));
         assert!(!uv_path.as_os_str().is_empty());
@@ -639,19 +750,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_stream_emits_events() {
+    async fn test_process_stream_emits_events_and_preserves_monotonic_progress() {
         use std::io::Cursor;
-        let sample_output = "Downloading 50% 10.0MB/s\rDownloading 80% 15.0MB/s\nCompleted\n";
+        // Output with progress, then non-progress informational line, then regression attempt
+        let sample_output =
+            "Downloading 50% 10.0MB/s\rResolved 42 dependencies\nDownloading 30% 5.0MB/s\rCompleted 100%\n";
         let cursor = Cursor::new(sample_output.as_bytes());
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
+
+        let tracker = Arc::new(MonotonicProgressTracker::new(10.0));
+        let history = Arc::new(Mutex::new(VecDeque::new()));
 
         process_stream(
             cursor,
             "test_stage",
             10.0,
             20.0,
+            tracker,
+            history.clone(),
             Arc::new(move |evt| {
                 events_clone.lock().unwrap().push(evt);
             }),
@@ -664,18 +782,31 @@ mod tests {
         // base_pct 10.0 + (50% * 20.0) = 20.0
         assert_eq!(captured[0].percent, 20.0);
         assert_eq!(captured[0].speed, "10.0MB/s");
+
+        // The second event was a non-progress line ("Resolved 42 dependencies")
+        // It must NOT have regressed to base_pct (10.0), but remained at 20.0!
+        assert_eq!(captured[1].message, "Resolved 42 dependencies");
+        assert_eq!(captured[1].percent, 20.0);
+
+        // The third event was a regression attempt (30% -> mapped 16.0%)
+        // It must stay at 20.0!
+        assert_eq!(captured[2].percent, 20.0);
+
+        // History buffer must record recent lines
+        let recorded = history.lock().unwrap();
+        assert!(recorded.contains(&"Resolved 42 dependencies".to_string()));
     }
 
     #[tokio::test]
-    async fn test_run_setup_invalid_binary_fails_and_creates_dirs() {
-        let temp_app_data = std::env::temp_dir().join("clarity_test_setup_invalid_app_data");
-        let temp_resources = std::env::temp_dir().join("clarity_test_setup_invalid_res");
+    async fn test_run_setup_invalid_binary_fails_with_diagnostics() {
+        let temp_app_data = std::env::temp_dir().join("clarity_test_setup_diag_app_data");
+        let temp_resources = std::env::temp_dir().join("clarity_test_setup_diag_res");
         let _ = std::fs::remove_dir_all(&temp_app_data);
         let _ = std::fs::remove_dir_all(&temp_resources);
         std::fs::create_dir_all(&temp_app_data).unwrap();
         std::fs::create_dir_all(&temp_resources).unwrap();
 
-        // Place a non-executable corrupt binary in temp_resources so resolve_uv_bin picks it up
+        // Create an invalid dummy executable that fails
         let fake_uv = if cfg!(windows) {
             temp_resources.join("uv.exe")
         } else {
@@ -692,12 +823,57 @@ mod tests {
         .await;
 
         assert!(res.is_err());
+        let err_msg = res.unwrap_err();
+        // Error message should identify the failure
+        assert!(
+            err_msg.contains("failed") || err_msg.contains("Failed"),
+            "Expected failure message, got: {}",
+            err_msg
+        );
+
         // Verify directories were created
         assert!(temp_app_data.join("python").is_dir());
         assert!(temp_app_data.join("env").is_dir());
         assert!(temp_app_data.join("models").is_dir());
         // Verify setup marker was NOT written on failure
         assert!(!temp_app_data.join(".setup_complete").exists());
+
+        let _ = std::fs::remove_dir_all(&temp_app_data);
+        let _ = std::fs::remove_dir_all(&temp_resources);
+    }
+
+    #[tokio::test]
+    async fn test_run_setup_retry_venv_allow_existing() {
+        let temp_app_data = std::env::temp_dir().join("clarity_test_setup_retry_app_data");
+        let temp_resources = std::env::temp_dir().join("clarity_test_setup_retry_res");
+        let _ = std::fs::remove_dir_all(&temp_app_data);
+        let _ = std::fs::remove_dir_all(&temp_resources);
+        std::fs::create_dir_all(&temp_app_data).unwrap();
+        std::fs::create_dir_all(&temp_resources).unwrap();
+
+        // Pre-create the env directory simulating a prior partial run
+        let existing_env = temp_app_data.join("env");
+        std::fs::create_dir_all(&existing_env).unwrap();
+        std::fs::write(existing_env.join("partial.txt"), b"dummy").unwrap();
+
+        let fake_uv = if cfg!(windows) {
+            temp_resources.join("uv.exe")
+        } else {
+            temp_resources.join("uv")
+        };
+        std::fs::write(&fake_uv, b"not_a_binary").unwrap();
+
+        let res = run_setup(
+            &temp_app_data,
+            &temp_resources,
+            GpuTarget::CpuFallback,
+            |_evt| {},
+        )
+        .await;
+
+        assert!(res.is_err());
+        // Ensure existing env was preserved and not broken by directory creation
+        assert!(existing_env.join("partial.txt").exists());
 
         let _ = std::fs::remove_dir_all(&temp_app_data);
         let _ = std::fs::remove_dir_all(&temp_resources);
