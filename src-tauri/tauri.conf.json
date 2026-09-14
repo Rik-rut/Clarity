@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.clarity.studio",
   "build": {
-    "frontendDist": "../src/video_upscaler/web/static",
-    "devUrl": "http://127.0.0.1:7860"
+    "frontendDist": "./shell"
   },
   "app": {
     "windows": [
@@ -18,12 +17,15 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "visible": false
+        "visible": true,
+        "dragDropEnabled": false,
+        "devtools": true
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
@@ -47,6 +49,8 @@
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installerHooks": "hooks.nsh",
         "installMode": "currentUser",
         "languages": ["English"],
         "displayLanguageSelector": false
