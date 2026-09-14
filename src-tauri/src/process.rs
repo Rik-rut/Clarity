@@ -139,7 +139,9 @@ pub struct BackendProcessManager {
 }
 
 // HANDLE is an OS-level pointer that can safely be moved across threads.
+// All &self methods are read-only and thread-safe.
 unsafe impl Send for BackendProcessManager {}
+unsafe impl Sync for BackendProcessManager {}
 
 impl BackendProcessManager {
     /// Spawns the Python backend server bound to the specified port and assigns it to a Windows Job Object.
@@ -195,7 +197,7 @@ impl BackendProcessManager {
     }
 
     /// Polls `http://127.0.0.1:{port}/api/system/info` until it returns 200 OK or times out.
-    pub async fn wait_until_ready(&self, timeout_secs: u64) -> Result<(), String> {
+    pub async fn wait_for_port_ready(port: u16, timeout_secs: u64) -> Result<(), String> {
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_millis(500))
             .build()
@@ -204,7 +206,7 @@ impl BackendProcessManager {
             Err(e) => return Err(format!("Failed to build HTTP client: {}", e)),
         };
 
-        let url = format!("http://127.0.0.1:{}/api/system/info", self.port);
+        let url = format!("http://127.0.0.1:{}/api/system/info", port);
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(timeout_secs);
         let poll_interval = Duration::from_millis(200);
@@ -222,6 +224,11 @@ impl BackendProcessManager {
             "Backend process failed to respond at {} within {} seconds",
             url, timeout_secs
         ))
+    }
+
+    /// Polls `http://127.0.0.1:{port}/api/system/info` until it returns 200 OK or times out.
+    pub async fn wait_until_ready(&self, timeout_secs: u64) -> Result<(), String> {
+        Self::wait_for_port_ready(self.port, timeout_secs).await
     }
 
     /// Terminates the backend process and closes the associated Job Object handle.
@@ -250,10 +257,12 @@ mod tests {
     use tokio::net::TcpListener as TokioTcpListener;
 
     fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
 
     #[test]
-    fn test_process_manager_is_send() {
+    fn test_process_manager_is_send_and_sync() {
         assert_send::<BackendProcessManager>();
+        assert_sync::<BackendProcessManager>();
     }
 
     #[test]
