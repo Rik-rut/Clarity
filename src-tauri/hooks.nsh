@@ -80,7 +80,7 @@ Var TensorrtChoice
 
   clarity_failed:
     CreateDirectory "$DataDir\logs"
-    FileOpen $1 "$DataDir\logs\provision-failed.log" a
+    FileOpen $1 "$DataDir\logs\provision.log" a
     FileWrite $1 "Provision failed, code $0$\r$\n"
     FileClose $1
     DetailPrint "[ERROR] The AI engine could not be installed (code $0)."
