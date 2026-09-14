@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 import sys
 import threading
@@ -108,6 +109,9 @@ def run_server(
     print(f"   Clarity Video UI is running at: {url}")
     print("======================================================")
     print("")
+
+    if os.environ.get("CLARITY_DESKTOP_MODE") == "1":
+        open_browser = False
 
     if open_browser:
         open_browser_when_ready(url, 1.0)

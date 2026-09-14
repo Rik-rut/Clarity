@@ -38,17 +38,34 @@ impl MonotonicProgressTracker {
     }
 }
 
-/// Checks whether the Python environment and setup have already been completed.
-///
-/// Setup is deemed complete if and only if:
-/// 1. The marker file `%LOCALAPPDATA%\Clarity\.setup_complete` exists.
-/// 2. The virtual environment's Python executable exists.
+/// Checks whether the production isolated Python environment and marker file exist in app_data_dir.
 pub fn is_setup_complete(app_data_dir: &Path) -> bool {
     let marker = app_data_dir.join(".setup_complete");
     let python_win = app_data_dir.join("env").join("Scripts").join("python.exe");
     let python_unix = app_data_dir.join("env").join("bin").join("python");
 
     marker.is_file() && (python_win.is_file() || python_unix.is_file())
+}
+
+/// Checks whether a local development environment (.venv) is present in the current or parent directory.
+pub fn has_dev_environment() -> bool {
+    let dev_venv = Path::new(".venv").join("Scripts").join("python.exe");
+    if dev_venv.is_file() {
+        return true;
+    }
+
+    let parent_dev_venv = Path::new("..").join(".venv").join("Scripts").join("python.exe");
+    if parent_dev_venv.is_file() {
+        return true;
+    }
+
+    if let Ok(venv_val) = std::env::var("VIRTUAL_ENV") {
+        if Path::new(&venv_val).join("Scripts").join("python.exe").is_file() {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Parses uv stdout/stderr lines to extract download/installation percentage and speed.

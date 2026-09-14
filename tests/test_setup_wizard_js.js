@@ -354,7 +354,7 @@ describe('Setup Wizard (setup.js) Unit Tests', () => {
     assert.strictEqual(env.elements['setup-error-banner'].classList.contains('hidden'), true);
   });
 
-  test('Standalone browser mode shows test bar and supports mock controls', async () => {
+  test('Standalone mode initializes safely and supports log toggling', async () => {
     // No Tauri
     const env = setupMockEnvironment(null);
     const vm = require('node:vm');
@@ -372,9 +372,6 @@ describe('Setup Wizard (setup.js) Unit Tests', () => {
     vm.createContext(sandbox);
     vm.runInContext(setupJsContent, sandbox);
     await new Promise(r => setTimeout(r, 30));
-
-    // Browser test bar should be visible
-    assert.strictEqual(env.elements['browser-test-bar'].classList.contains('hidden'), false);
 
     // Test toggle logs
     assert.strictEqual(env.elements['logs-drawer'].classList.contains('hidden'), true);

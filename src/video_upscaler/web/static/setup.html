@@ -467,40 +467,6 @@
       color: var(--text-primary);
     }
 
-    /* Browser Test Toolbar (shown when not in Tauri) */
-    .browser-test-bar {
-      background: rgba(36, 36, 36, 0.95);
-      border: 1px dashed var(--border-light);
-      border-radius: 0.5rem;
-      padding: 0.75rem 1rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      font-size: 0.775rem;
-      color: var(--text-muted);
-    }
-
-    .browser-test-actions {
-      display: flex;
-      gap: 0.5rem;
-    }
-
-    .btn-test {
-      background: var(--bg-surface-3);
-      border: 1px solid var(--border-subtle);
-      color: var(--text-secondary);
-      border-radius: 0.35rem;
-      padding: 0.3rem 0.65rem;
-      font-size: 0.75rem;
-      cursor: pointer;
-    }
-
-    .btn-test:hover {
-      background: var(--accent);
-      color: #121214;
-    }
-
     @keyframes fade-in {
       from { opacity: 0; transform: translateY(-4px); }
       to { opacity: 1; transform: translateY(0); }
@@ -627,16 +593,6 @@
         </div>
       </div>
 
-    </div>
-
-    <!-- BROWSER TEST BAR (FALLBACK PREVIEW CONTROLS) -->
-    <div class="browser-test-bar hidden" id="browser-test-bar">
-      <span>Browser Preview Mode (No Tauri Shell Detected)</span>
-      <div class="browser-test-actions">
-        <button class="btn-test" id="btn-test-simulate">Simulate Setup</button>
-        <button class="btn-test" id="btn-test-error">Simulate Error</button>
-        <button class="btn-test" id="btn-test-reset">Reset</button>
-      </div>
     </div>
   </div>
 

@@ -47,3 +47,14 @@ def test_video_streaming_nonexistent_file():
     client = TestClient(app)
     resp = client.get("/api/stream/video", params={"path": "/non/existent/video.mp4..."})
     assert resp.status_code == 404
+
+
+def test_desktop_mode_suppresses_browser_opening(monkeypatch):
+    from video_upscaler.web import server
+    browser_opened = []
+    monkeypatch.setattr(server, "open_browser_when_ready", lambda url, delay=1.0: browser_opened.append(url))
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)
+    monkeypatch.setenv("CLARITY_DESKTOP_MODE", "1")
+
+    server.run_server(port=7899, open_browser=True)
+    assert len(browser_opened) == 0

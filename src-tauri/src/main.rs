@@ -25,7 +25,7 @@ fn main() {
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
-            let is_complete = setup::is_setup_complete(&app_data_dir);
+            let is_complete = setup::is_setup_complete(&app_data_dir) || setup::has_dev_environment();
 
             tauri::async_runtime::spawn(async move {
                 // Yield briefly to ensure webview window attachment on cold start

@@ -84,11 +84,7 @@
       logsDrawer: document.getElementById('logs-drawer'),
       logsTerminal: document.getElementById('logs-terminal'),
       btnClearLogs: document.getElementById('btn-clear-logs'),
-      btnCopyLogs: document.getElementById('btn-copy-logs'),
-      browserTestBar: document.getElementById('browser-test-bar'),
-      btnTestSimulate: document.getElementById('btn-test-simulate'),
-      btnTestError: document.getElementById('btn-test-error'),
-      btnTestReset: document.getElementById('btn-test-reset')
+      btnCopyLogs: document.getElementById('btn-copy-logs')
     };
   }
 
@@ -436,67 +432,6 @@
   }
 
   /**
-   * Browser mock simulation for testing outside Tauri shell.
-   */
-  function runMockSimulation(simulateError = false) {
-    resetUI();
-    appendLog('Starting browser preview mock simulation...', 'info');
-
-    const steps = [
-      { stage: 'init', percent: 5, speed: '', msg: 'Created %LOCALAPPDATA%\\Clarity runtime directories' },
-      { stage: 'python', percent: 12, speed: '18.5 MB/s', msg: 'Downloading python-3.11.9-windows-x86_64.tar.gz' },
-      { stage: 'python', percent: 22, speed: '24.2 MB/s', msg: 'Unpacking Python standalone runtime' },
-      { stage: 'venv', percent: 28, speed: '', msg: 'Creating virtual environment in %LOCALAPPDATA%\\Clarity\\env' },
-      { stage: 'venv', percent: 34, speed: '', msg: 'Configured isolated site-packages and launcher' },
-      { stage: 'dependencies', percent: 45, speed: '32.1 MB/s', msg: 'Fetching torch-2.3.0+cu126-cp311-win_amd64.whl' },
-      { stage: 'dependencies', percent: 65, speed: '28.4 MB/s', msg: 'Installing torchvision and onnxruntime-gpu' }
-    ];
-
-    if (simulateError) {
-      steps.push({
-        isError: true,
-        error: 'Network timeout downloading torch wheels from download.pytorch.org: Connection reset by peer'
-      });
-    } else {
-      steps.push(
-        { stage: 'dependencies', percent: 78, speed: '15.2 MB/s', msg: 'Installing Clarity Studio core package' },
-        { stage: 'models', percent: 85, speed: '12.8 MB/s', msg: 'Downloading Real-CUGAN models (2x, 3x, 4x weights)' },
-        { stage: 'models', percent: 95, speed: '16.0 MB/s', msg: 'Downloading AMT-S interpolation checkpoint' },
-        { stage: 'complete', percent: 100, speed: '', msg: 'Writing .setup_complete marker' }
-      );
-    }
-
-    let idx = 0;
-    state.mockTimer = setInterval(() => {
-      if (idx >= steps.length) {
-        clearInterval(state.mockTimer);
-        state.mockTimer = null;
-        return;
-      }
-
-      const item = steps[idx];
-      idx++;
-
-      if (item.isError) {
-        handleError(item.error);
-        clearInterval(state.mockTimer);
-        state.mockTimer = null;
-      } else if (item.stage === 'complete') {
-        handleComplete({ port: 7860 });
-        clearInterval(state.mockTimer);
-        state.mockTimer = null;
-      } else {
-        handleProgress({
-          stage: item.stage,
-          percent: item.percent,
-          speed: item.speed,
-          message: item.msg
-        });
-      }
-    }, 450);
-  }
-
-  /**
    * Bind event listeners to DOM controls.
    */
   function bindEvents() {
@@ -527,17 +462,6 @@
           }).catch(() => {});
         }
       });
-    }
-
-    // Browser Preview Controls
-    if (dom.btnTestSimulate) {
-      dom.btnTestSimulate.addEventListener('click', () => runMockSimulation(false));
-    }
-    if (dom.btnTestError) {
-      dom.btnTestError.addEventListener('click', () => runMockSimulation(true));
-    }
-    if (dom.btnTestReset) {
-      dom.btnTestReset.addEventListener('click', resetUI);
     }
   }
 
@@ -587,19 +511,6 @@
         console.error('Failed to configure Tauri setup stream:', err);
         handleError(err && err.message ? err.message : String(err));
       }
-    } else {
-      // Standalone browser preview mode
-      if (dom.browserTestBar) {
-        dom.browserTestBar.classList.remove('hidden');
-      }
-      appendLog('Running in standalone browser mode. Test controls active.', 'info');
-
-      if (typeof URLSearchParams !== 'undefined' && window.location && window.location.search) {
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('mock')) {
-          runMockSimulation(urlParams.get('mock') === 'error');
-        }
-      }
     }
   }
 
@@ -611,7 +522,6 @@
     handleError,
     retrySetup,
     resetUI,
-    runMockSimulation,
     appendLog
   };
 
