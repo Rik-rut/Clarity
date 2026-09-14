@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod hardware;
+pub mod process;
 
 fn main() {
     tauri::Builder::default()
