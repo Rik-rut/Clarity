@@ -52,7 +52,7 @@ def _run_slow_motion_job(tmp_path, monkeypatch, model_key, make_install, process
 
 def _record_and_materialize(calls):
     def make(models_dir):
-        def fake_install(entry):
+        def fake_install(entry, *args, **kwargs):
             calls.append(entry)
             dest = models_dir / PurePosixPath(entry["dest"]).name
             dest.write_bytes(b"fake-checkpoint")
@@ -107,7 +107,7 @@ def test_slow_motion_job_skips_fetch_when_checkpoint_present(
     out_dir.mkdir()
     monkeypatch.setattr(config, "MODELS_DIR", models_dir)
 
-    def fail_on_fetch(entry):
+    def fail_on_fetch(entry, *args, **kwargs):
         raise AssertionError(f"no fetch expected, got {entry!r}")
 
     monkeypatch.setattr("video_upscaler.modelhub.install_entry", fail_on_fetch)
@@ -138,7 +138,7 @@ def test_slow_motion_job_fetch_failure_surfaces_as_job_error(tmp_path, monkeypat
     process_calls: list = []
 
     def make_failing(models_dir):
-        def fake_install(entry):
+        def fake_install(entry, *args, **kwargs):
             raise HubError("Failed to download amt/amt-g.pth:\nboom")
 
         return fake_install

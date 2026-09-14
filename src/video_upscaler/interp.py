@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -394,7 +395,11 @@ def check_amt(model_key: str) -> str | None:
     )
 
 
-def download_amt_model(model_key: str) -> Path:
+def download_amt_model(
+    model_key: str,
+    *,
+    progress_cb: Callable[[int, int | None], None] | None = None,
+) -> Path:
     """Download one AMT checkpoint from the Clarity model hub.
 
     Raises HubError (RuntimeError) with an actionable message on failure.
@@ -414,7 +419,7 @@ def download_amt_model(model_key: str) -> Path:
             f"AMT checkpoint {name} is not in the model manifest; "
             "regenerate it with tools/package_models.py."
         )
-    return modelhub.install_entry(matches[0])
+    return modelhub.install_entry(matches[0], progress_cb=progress_cb)
 
 
 def _torch_cuda_available() -> bool:

@@ -24,7 +24,7 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable, Optional
 from urllib.parse import unquote, urlparse
 
 DEFAULT_HUB_REPO = "Rikrut/clarity"
@@ -152,7 +152,13 @@ def _verify_hash(path: Path, expected_sha256: str) -> bool:
     return sha256_file(path) == expected_sha256
 
 
-def _download_http(url: str, dest: Path, label: str, expected_size: int) -> None:
+def _download_http(
+    url: str,
+    dest: Path,
+    label: str,
+    expected_size: int,
+    progress_cb: Optional[Callable[[int, Optional[int]], None]] = None,
+) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "clarity-upscaler"})
     with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_S) as response:
         total_header = response.headers.get("Content-Length")
@@ -166,6 +172,8 @@ def _download_http(url: str, dest: Path, label: str, expected_size: int) -> None
                 handle.write(chunk)
                 done += len(chunk)
                 _print_progress(label, done, total)
+                if progress_cb is not None:
+                    progress_cb(done, total)
     print()
 
 
@@ -175,7 +183,12 @@ def _print_progress(label: str, done: int, total: int) -> None:
     print(f"\r{message:<70}", end="", flush=True)
 
 
-def install_entry(entry: dict[str, Any], quiet_existing: bool = False) -> Path:
+def install_entry(
+    entry: dict[str, Any],
+    quiet_existing: bool = False,
+    *,
+    progress_cb: Optional[Callable[[int, Optional[int]], None]] = None,
+) -> Path:
     """Install one manifest entry into its group root (idempotent).
 
     Fast path: an existing file with the expected size is kept as-is.
@@ -204,10 +217,15 @@ def install_entry(entry: dict[str, Any], quiet_existing: bool = False) -> Path:
                 raise HubError(f"Missing in local hub ({local_dir}): {source}")
             print(f"Copying {source.name} from local hub...")
             shutil.copyfile(source, temp_path)
+            if progress_cb is not None:
+                total = int(entry["size"])
+                progress_cb(total, total)
         else:
             url = _entry_source_url(_entry_base(entry), entry["path"])
             try:
-                _download_http(url, temp_path, label, int(entry["size"]))
+                _download_http(
+                    url, temp_path, label, int(entry["size"]), progress_cb
+                )
             except (urllib.error.URLError, OSError) as exc:
                 raise HubError(
                     f"Failed to download {entry['path']}:\n{exc}\n\n"
