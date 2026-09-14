@@ -1,35 +1,49 @@
 /**
- * Clarity Studio — Setup Wizard & Desktop IPC Bridge
- * Coordinates first-run environment provisioning with Tauri backend.
+ * Clarity Studio — First-Run Setup Wizard
+ *
+ * Drives the desktop provisioning server (video_upscaler/desktop/server.py)
+ * over loopback HTTP. There is deliberately no desktop IPC in this page: the
+ * wizard is a page of the product, so the exact same file renders in the Tauri
+ * webview and in a plain browser, and "works in the browser" means "works on
+ * the desktop".
  */
 
 (function () {
   'use strict';
 
-  // State
-  const state = {
-    isTauri: typeof window !== 'undefined' && Boolean(window.__TAURI__),
-    percent: 0,
-    stage: 'init',
-    speed: '',
-    logs: [],
-    startTime: Date.now(),
-    isComplete: false,
-    hasError: false,
-    mockTimer: null
+  const POLL_MS = 500;
+
+  // Provisioning order and the endpoint that starts each step.
+  const STEP_ENDPOINTS = {
+    gpu: '/api/setup/detect-gpu',
+    runtime: '/api/setup/runtime',
+    models: '/api/setup/models',
+    verify: '/api/setup/verify',
+    complete: '/api/setup/complete'
   };
 
-  // Stage display metadata and stepper mapping
+  // Stage display metadata and stepper mapping. `runtime` covers both the venv
+  // and the dependency install; the server reports which phase it is in.
   const STAGE_CONFIG = {
     init: {
       stepIndex: 0,
       title: 'Initializing Environment...',
       taskBadge: 'Preparing Workspace'
     },
+    gpu: {
+      stepIndex: 1,
+      title: 'Detecting GPU Hardware...',
+      taskBadge: 'Detecting'
+    },
     python: {
       stepIndex: 1,
       title: 'Downloading & Installing Python 3.11 Runtime...',
       taskBadge: 'Step 1 of 4'
+    },
+    runtime: {
+      stepIndex: 2,
+      title: 'Creating Isolated Virtual Environment...',
+      taskBadge: 'Step 2 of 4'
     },
     venv: {
       stepIndex: 2,
@@ -46,11 +60,33 @@
       title: 'Fetching Neural Weights (Real-CUGAN & AMT-S)...',
       taskBadge: 'Step 4 of 4'
     },
+    verify: {
+      stepIndex: 5,
+      title: 'Verifying the Provisioned Environment...',
+      taskBadge: 'Verifying'
+    },
     complete: {
       stepIndex: 5,
       title: 'AI Engine Setup Completed!',
       taskBadge: 'Setup Ready'
     }
+  };
+
+  // State
+  const state = {
+    percent: 0,
+    stage: 'init',
+    speed: '',
+    logs: [],
+    seenLogLines: 0,
+    startTime: Date.now(),
+    isComplete: false,
+    hasError: false,
+    busy: false,
+    nextStep: '',
+    stepStatuses: {},
+    pollTimer: null,
+    unavailableSince: 0
   };
 
   // DOM Elements cache
@@ -89,32 +125,31 @@
   }
 
   /**
-   * Tauri IPC invoke abstraction supporting both Tauri v2 (`core.invoke`) and v1 (`invoke`).
+   * JSON fetch helper. Returns null when the wizard server is unreachable, so
+   * the caller can keep the last known UI state instead of flickering.
    */
-  async function invokeTauri(cmd, args = {}) {
-    if (!state.isTauri) {
-      throw new Error(`Tauri environment not detected: cannot invoke "${cmd}"`);
+  async function request(path, options) {
+    const response = await fetch(path, options);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error((payload && payload.error) || `Setup server returned ${response.status}`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
     }
-
-    if (window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
-      return await window.__TAURI__.core.invoke(cmd, args);
-    }
-    if (typeof window.__TAURI__.invoke === 'function') {
-      return await window.__TAURI__.invoke(cmd, args);
-    }
-    throw new Error('Tauri invoke API unavailable');
+    return payload;
   }
 
-  /**
-   * Tauri event listener abstraction.
-   */
-  async function listenTauri(eventName, callback) {
-    if (!state.isTauri) return null;
+  function getJSON(path) {
+    return request(path, { method: 'GET', headers: { Accept: 'application/json' } });
+  }
 
-    if (window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
-      return await window.__TAURI__.event.listen(eventName, callback);
-    }
-    return null;
+  function postJSON(path, body) {
+    return request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
   }
 
   /**
@@ -153,15 +188,15 @@
     const now = new Date();
     const timeStr = now.toTimeString().split(' ')[0];
     const line = `[${timeStr}] ${message}`;
-    state.logs.push({ time: timeStr, text: message, type });
+    state.logs.push({ time: timeStr, text: line, type });
 
     if (dom.logsTerminal) {
       const lineSpan = document.createElement('div');
       lineSpan.className = type === 'error'
         ? 'log-line-err'
         : type === 'uv'
-        ? 'log-line-uv'
-        : 'log-line-info';
+          ? 'log-line-uv'
+          : 'log-line-info';
       lineSpan.textContent = line;
       dom.logsTerminal.appendChild(lineSpan);
       dom.logsTerminal.scrollTop = dom.logsTerminal.scrollHeight;
@@ -170,6 +205,23 @@
     if (dom.logsCountBadge) {
       dom.logsCountBadge.textContent = `${state.logs.length} lines`;
     }
+  }
+
+  /**
+   * Sync the log console with a server snapshot (only unseen lines are added).
+   */
+  function syncLogs(snapshot) {
+    const lines = Array.isArray(snapshot.lines) ? snapshot.lines : [];
+    const total = typeof snapshot.total === 'number' ? snapshot.total : lines.length;
+    const unseen = Math.max(0, Math.min(lines.length, total - state.seenLogLines));
+    const fresh = lines.slice(lines.length - unseen);
+    state.seenLogLines = total;
+
+    const step = snapshot.phase || snapshot.step || snapshot.stage || state.stage;
+    fresh.forEach((text) => {
+      const isUv = /%|Downloading|Installing|Prepared|Resolved|Building/.test(text);
+      appendLog(text, isUv ? 'uv' : step === 'verify' ? 'info' : 'info');
+    });
   }
 
   /**
@@ -192,58 +244,48 @@
   }
 
   /**
-   * Process a progress event from Tauri backend or test harness.
+   * Render a progress snapshot from the setup server.
    *
    * @param {Object} event
-   * @param {string} event.stage - Stage identifier ('init', 'python', 'venv', 'dependencies', 'models', 'complete')
-   * @param {number} event.percent - Progress percentage (0.0 - 100.0)
-   * @param {string} [event.speed] - Transfer rate (e.g. '24.5MB/s')
-   * @param {string} [event.message] - Status log message
+   * @param {string} [event.step]  - 'gpu' | 'runtime' | 'models' | 'verify' | 'complete'
+   * @param {string} [event.phase] - sub-phase of 'runtime' ('venv' | 'dependencies')
+   * @param {number} [event.percent]
+   * @param {string} [event.speed]
+   * @param {string} [event.message]
    */
   function handleProgress(event) {
     if (!event) return;
-    state.hasError = false;
-    if (dom.errorBanner) dom.errorBanner.classList.add('hidden');
 
-    const stageKey = (event.stage || state.stage || 'init').toLowerCase();
+    syncLogs(event);
+
+    const stageKey = String(event.phase || event.step || event.stage || state.stage || 'init');
     const config = STAGE_CONFIG[stageKey] || {
       stepIndex: 1,
-      title: event.stage || 'Processing...',
+      title: event.message || 'Processing...',
       taskBadge: 'In Progress'
     };
 
     state.stage = stageKey;
-    const percent = Math.min(100, Math.max(0, Number(event.percent) || state.percent || 0));
-    state.percent = percent;
+    const percent = Math.min(100, Math.max(0, Number(event.percent) || 0));
+    state.percent = Math.max(state.percent, percent);
     state.speed = event.speed || '';
 
-    // Update Percentage Text
     if (dom.percentText) {
-      dom.percentText.textContent = `${percent.toFixed(1)}%`;
+      dom.percentText.textContent = `${state.percent.toFixed(1)}%`;
     }
 
-    // Update Smooth Progress Bar
     if (dom.progressBar) {
-      dom.progressBar.style.width = `${percent}%`;
+      dom.progressBar.style.width = `${state.percent}%`;
       const track = dom.progressBar.parentElement;
-      if (track) track.setAttribute('aria-valuenow', Math.round(percent));
+      if (track) track.setAttribute('aria-valuenow', Math.round(state.percent));
     }
 
-    // Update Stage Titles
-    if (dom.stageTitle) {
-      dom.stageTitle.textContent = config.title;
-    }
-    if (dom.statusMessage && event.message) {
-      dom.statusMessage.textContent = event.message;
-    }
-    if (dom.activeTaskBadge) {
-      dom.activeTaskBadge.textContent = config.taskBadge;
-    }
+    if (dom.stageTitle) dom.stageTitle.textContent = config.title;
+    if (dom.statusMessage && event.message) dom.statusMessage.textContent = event.message;
+    if (dom.activeTaskBadge) dom.activeTaskBadge.textContent = config.taskBadge;
 
-    // Update Stepper
     updateStepper(config.stepIndex);
 
-    // Update Speed Display
     if (dom.speedBadge && dom.speedText) {
       if (state.speed && state.speed.trim() !== '') {
         dom.speedText.textContent = state.speed;
@@ -253,9 +295,8 @@
       }
     }
 
-    // Update ETA Display
     if (dom.etaBadge && dom.etaText) {
-      const eta = calculateETA(percent);
+      const eta = calculateETA(state.percent);
       if (eta) {
         dom.etaText.textContent = `ETA: ${eta}`;
         dom.etaBadge.classList.remove('hidden');
@@ -263,62 +304,37 @@
         dom.etaBadge.classList.add('hidden');
       }
     }
-
-    // Append to Logs
-    if (event.message) {
-      const isUv = state.speed || event.message.includes('%') || event.message.includes('Downloading');
-      appendLog(event.message, isUv ? 'uv' : 'info');
-    }
   }
 
   /**
-   * Handle setup completion event.
+   * Handle setup completion.
    */
   function handleComplete(payload = {}) {
+    if (state.isComplete) return;
     state.isComplete = true;
     state.hasError = false;
+    stopPolling();
 
     handleProgress({
-      stage: 'complete',
+      step: 'complete',
       percent: 100.0,
       speed: '',
-      message: 'Setup finalized successfully. Launching Studio...'
+      message: 'Setup finalized successfully. The studio opens automatically.'
     });
 
     updateStepper(5);
 
-    if (dom.successBanner) {
-      dom.successBanner.classList.remove('hidden');
-    }
-    if (dom.errorBanner) {
-      dom.errorBanner.classList.add('hidden');
+    if (dom.successBanner) dom.successBanner.classList.remove('hidden');
+    if (dom.errorBanner) dom.errorBanner.classList.add('hidden');
+    if (dom.successSubtitle) {
+      dom.successSubtitle.textContent = 'Environment ready — launching Clarity Studio…';
     }
 
-    appendLog('✓ First-time setup complete! Redirecting to Clarity Web Studio...', 'info');
-
-    // Smooth transition / redirect
-    const redirectUrl = payload.url || (payload.port ? `http://127.0.0.1:${payload.port}/` : '/');
-    setTimeout(() => {
-      if (state.isTauri) {
-        // In Tauri standalone, invoke launch or navigate
-        try {
-          invokeTauri('launch_main_app', { url: redirectUrl }).catch(() => {
-            window.location.href = redirectUrl;
-          });
-        } catch (_) {
-          window.location.href = redirectUrl;
-        }
-      } else {
-        // Browser fallback
-        if (dom.successSubtitle) {
-          dom.successSubtitle.textContent = `Ready! Redirect target: ${redirectUrl}`;
-        }
-      }
-    }, 1200);
+    appendLog('✓ First-time setup complete!', 'info');
   }
 
   /**
-   * Handle setup error event with retry affordance.
+   * Handle a setup failure with the retry affordance.
    */
   function handleError(payload) {
     state.hasError = true;
@@ -326,51 +342,47 @@
       ? payload
       : (payload && (payload.error || payload.message)) || 'Unknown installation failure';
 
-    if (dom.errorMessage) {
-      dom.errorMessage.textContent = errorMsg;
-    }
-    if (dom.errorBanner) {
-      dom.errorBanner.classList.remove('hidden');
-    }
-    if (dom.successBanner) {
-      dom.successBanner.classList.add('hidden');
-    }
-
-    if (dom.stageTitle) {
-      dom.stageTitle.textContent = 'Setup Paused on Error';
-    }
+    if (dom.errorMessage) dom.errorMessage.textContent = errorMsg;
+    if (dom.errorBanner) dom.errorBanner.classList.remove('hidden');
+    if (dom.successBanner) dom.successBanner.classList.add('hidden');
+    if (dom.stageTitle) dom.stageTitle.textContent = 'Setup Paused on Error';
     if (dom.statusMessage) {
       dom.statusMessage.textContent = 'Click "Retry Setup" to resume or check technical logs below.';
     }
+    if (dom.speedBadge) dom.speedBadge.classList.add('hidden');
+    if (dom.etaBadge) dom.etaBadge.classList.add('hidden');
 
     appendLog(`[ERROR] ${errorMsg}`, 'error');
-
-    // Automatically expand the logs accordion on error so technical diagnostics are visible
     expandLogs();
   }
 
   /**
-   * Re-trigger setup after an error.
+   * Re-run the failed (or current) step and let the polling loop resume.
    */
   async function retrySetup() {
+    const step = failedStep() || state.nextStep || 'gpu';
     state.hasError = false;
+    state.percent = 0;
     if (dom.errorBanner) dom.errorBanner.classList.add('hidden');
-    appendLog('Retrying setup...', 'info');
+    appendLog(`Retrying setup from step '${step}'...`, 'info');
 
-    if (state.isTauri) {
-      try {
-        // Try retry_setup command, fall back to start_setup
-        try {
-          await invokeTauri('retry_setup');
-        } catch (_) {
-          await invokeTauri('start_setup');
-        }
-      } catch (err) {
-        handleError(err && err.message ? err.message : String(err));
-      }
-    } else {
-      runMockSimulation();
+    try {
+      await postJSON('/api/setup/retry', { step });
+      state.seenLogLines = 0;
+      if (dom.logsTerminal) dom.logsTerminal.innerHTML = '';
+      await refresh();
+    } catch (err) {
+      handleError(err && err.message ? err.message : String(err));
     }
+  }
+
+  function failedStep() {
+    const statuses = state.stepStatuses || {};
+    const order = Object.keys(STEP_ENDPOINTS);
+    for (const step of order) {
+      if (statuses[step] === 'failed') return step;
+    }
+    return '';
   }
 
   /**
@@ -408,13 +420,11 @@
    * Reset UI to initial zero state.
    */
   function resetUI() {
-    if (state.mockTimer) {
-      clearInterval(state.mockTimer);
-      state.mockTimer = null;
-    }
+    stopPolling();
     state.percent = 0;
     state.stage = 'init';
     state.speed = '';
+    state.seenLogLines = 0;
     state.isComplete = false;
     state.hasError = false;
     state.startTime = Date.now();
@@ -432,17 +442,99 @@
   }
 
   /**
+   * Start one provisioning step if (and only if) it is still pending. A failed
+   * step is never auto-retried: that is the Retry button's job.
+   */
+  async function advance(status) {
+    if (!status || state.isComplete || state.hasError) return;
+    const step = status.next_step;
+    if (!step || !STEP_ENDPOINTS[step]) return;
+    if ((status.state && status.state.steps && status.state.steps[step]) !== 'pending') return;
+    if (status.running) return;
+
+    try {
+      await postJSON(STEP_ENDPOINTS[step], {});
+    } catch (err) {
+      // 409 just means the server is busy with this step; keep polling.
+      if (err.status === 409) return;
+      handleError(err && err.message ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Pull one status + progress pair and reconcile the UI with it.
+   */
+  async function refresh() {
+    if (state.busy || state.isComplete) return;
+    state.busy = true;
+
+    try {
+      const status = await getJSON('/api/setup/status');
+      state.unavailableSince = 0;
+      state.nextStep = status.next_step;
+      state.stepStatuses = (status.state && status.state.steps) || {};
+
+      if (status.complete) {
+        handleComplete(status);
+        return;
+      }
+
+      const progress = await getJSON('/api/setup/progress');
+      handleProgress(progress);
+
+      if (progress.error && !progress.running) {
+        handleError(progress.error);
+        return;
+      }
+
+      if (!progress.running) {
+        await advance(status);
+      }
+    } catch (err) {
+      onUnavailable(err);
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  /**
+   * The wizard server went away. Before provisioning it is the shell's job;
+   * after completion it is expected (the shell moved on to the studio).
+   */
+  function onUnavailable(err) {
+    if (!state.unavailableSince) {
+      state.unavailableSince = Date.now();
+      appendLog(`Setup server unavailable: ${err.message || err}`, 'error');
+      return;
+    }
+    if (Date.now() - state.unavailableSince > 60000) {
+      handleError('Lost contact with the setup server. Relaunch Clarity to continue.');
+      stopPolling();
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    state.pollTimer = setInterval(refresh, POLL_MS);
+  }
+
+  function stopPolling() {
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  /**
    * Bind event listeners to DOM controls.
    */
   function bindEvents() {
     if (dom.btnToggleLogs) {
       dom.btnToggleLogs.addEventListener('click', toggleLogs);
     }
-
     if (dom.btnRetry) {
       dom.btnRetry.addEventListener('click', retrySetup);
     }
-
     if (dom.btnClearLogs) {
       dom.btnClearLogs.addEventListener('click', () => {
         state.logs = [];
@@ -450,10 +542,9 @@
         if (dom.logsCountBadge) dom.logsCountBadge.textContent = '0 lines';
       });
     }
-
     if (dom.btnCopyLogs) {
       dom.btnCopyLogs.addEventListener('click', () => {
-        const text = state.logs.map(l => `[${l.time}] ${l.text}`).join('\n');
+        const text = state.logs.map((l) => l.text).join('\n');
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).then(() => {
             const orig = dom.btnCopyLogs.textContent;
@@ -466,52 +557,16 @@
   }
 
   /**
-   * Main Initialization
+   * Main initialization
    */
   async function init() {
     initDOM();
     bindEvents();
+    resetUI();
 
-    if (state.isTauri) {
-      appendLog('Tauri desktop shell connected. Initializing setup listeners...', 'info');
-
-      try {
-        // Listen to setup progress stream from Rust backend
-        await listenTauri('setup-progress', (event) => {
-          handleProgress(event.payload);
-        });
-
-        // Listen to setup complete event
-        await listenTauri('setup-complete', (event) => {
-          handleComplete(event.payload);
-        });
-
-        // Listen to setup error event
-        await listenTauri('setup-error', (event) => {
-          handleError(event.payload);
-        });
-
-        // Check if setup is already complete or start it
-        try {
-          const status = await invokeTauri('get_setup_status');
-          if (status === 'completed' || (status && status.complete)) {
-            handleComplete(status);
-            return;
-          }
-        } catch (_) {
-          // Command not yet registered or error, proceed to start_setup
-        }
-
-        appendLog('Invoking start_setup command...', 'info');
-        await invokeTauri('start_setup').catch((err) => {
-          console.warn('start_setup invocation returned:', err);
-        });
-
-      } catch (err) {
-        console.error('Failed to configure Tauri setup stream:', err);
-        handleError(err && err.message ? err.message : String(err));
-      }
-    }
+    appendLog('Connected to the Clarity setup server. Provisioning the runtime...', 'info');
+    await refresh();
+    startPolling();
   }
 
   // Export testing hooks for automated unit test suites and diagnostics
@@ -522,7 +577,10 @@
     handleError,
     retrySetup,
     resetUI,
-    appendLog
+    appendLog,
+    refresh,
+    STAGE_CONFIG,
+    STEP_ENDPOINTS
   };
 
   // Launch on DOM ready

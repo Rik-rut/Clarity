@@ -100,7 +100,9 @@ function setupMockEnvironment(customTauri = null) {
     'setup-active-task-badge', 'setup-error-banner', 'setup-error-message', 'btn-retry-setup',
     'setup-success-banner', 'setup-success-subtitle', 'logs-accordion', 'btn-toggle-logs',
     'logs-toggle-label', 'logs-count-badge', 'logs-drawer', 'logs-terminal', 'btn-clear-logs',
-    'btn-copy-logs', 'browser-test-bar', 'btn-test-simulate', 'btn-test-error', 'btn-test-reset'
+    'btn-copy-logs', 'browser-test-bar', 'btn-test-simulate', 'btn-test-error', 'btn-test-reset',
+    'setup-storage-row', 'setup-storage-path', 'setup-storage-note', 'setup-storage-error',
+    'btn-change-storage'
   ];
 
   elementIds.forEach(id => {
@@ -144,234 +146,238 @@ function setupMockEnvironment(customTauri = null) {
   return { elements, mockDocument, mockWindow, domListeners };
 }
 
+/**
+ * Test doubles for the HTTP wizard protocol.
+ *
+ * The wizard page talks to video_upscaler/desktop/server.py over loopback HTTP,
+ * so the only environment it needs is a fetch stub. The Tauri spy exists purely
+ * to prove the page no longer depends on desktop IPC.
+ */
+function setupJsPathForTests() {
+  return path.resolve(__dirname, '../src/video_upscaler/web/static/js/setup.js');
+}
+
+function makeFetchStub(calls, routes) {
+  return async function fetchStub(path, options) {
+    const opts = options || {};
+    const record = {
+      path,
+      method: opts.method || 'GET',
+      body: opts.body ? JSON.parse(opts.body) : null
+    };
+    calls.push(record);
+
+    const table = typeof routes === 'function' ? routes(record) : routes[path];
+    if (table === undefined) {
+      return { ok: false, status: 404, json: async () => ({ error: 'unexpected call ' + path }) };
+    }
+    return { ok: true, status: 200, json: async () => table };
+  };
+}
+
+function makeTauriSpy(ipc, results) {
+  return {
+    event: {
+      listen: (name) => {
+        ipc.listened.push(name);
+        return Promise.resolve(() => {});
+      }
+    },
+    core: {
+      invoke: (cmd, args) => {
+        ipc.invoked.push({ cmd, args });
+        const table = results || {};
+        return Promise.resolve(table[cmd] === undefined ? null : table[cmd]);
+      }
+    }
+  };
+}
+
+async function runSetupJs(env, fetchImpl, settleMs) {
+  const vm = require('node:vm');
+  const sandbox = {
+    window: env.mockWindow,
+    document: env.mockDocument,
+    console,
+    fetch: fetchImpl,
+    navigator: { clipboard: { writeText: () => Promise.resolve() } },
+    // The wizard polls, so its timers must not hold the test process open.
+    setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); if (t && t.unref) t.unref(); return t; },
+    clearTimeout,
+    setInterval: (fn, ms) => { const t = setInterval(fn, ms); if (t && t.unref) t.unref(); return t; },
+    clearInterval,
+    URLSearchParams,
+    Date
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(setupJsPathForTests(), 'utf8'), sandbox);
+  await new Promise((resolve) => setTimeout(resolve, settleMs === undefined ? 60 : settleMs));
+  return sandbox;
+}
+
 describe('Setup Wizard (setup.js) Unit Tests', () => {
   const setupJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/setup.js');
   const setupJsContent = fs.readFileSync(setupJsPath, 'utf8');
 
-  test('Tauri environment: listeners registered and start_setup invoked', async () => {
-    const tauriEvents = {};
-    const tauriInvocations = [];
+  test('wizard talks HTTP to the provisioning server and never uses desktop IPC', async () => {
+    const calls = [];
+    const ipc = { invoked: [], listened: [] };
 
-    const mockTauri = {
-      event: {
-        listen: (event, handler) => {
-          tauriEvents[event] = handler;
-          return Promise.resolve(() => {});
-        }
+    const env = setupMockEnvironment(makeTauriSpy(ipc));
+    await runSetupJs(env, makeFetchStub(calls, {
+      '/api/setup/status': {
+        complete: false,
+        running: false,
+        next_step: 'gpu',
+        state: { steps: { gpu: 'pending' } }
       },
-      core: {
-        invoke: (cmd, args) => {
-          tauriInvocations.push({ cmd, args });
-          if (cmd === 'get_setup_status') {
-            return Promise.resolve({ complete: false });
-          }
-          if (cmd === 'start_setup') {
-            return Promise.resolve({ started: true });
-          }
-          return Promise.resolve(null);
-        }
-      }
-    };
+      '/api/setup/progress': { running: false, step: 'gpu', percent: 0, lines: [], total: 0 }
+    }));
 
-    const env = setupMockEnvironment(mockTauri);
+    const paths = calls.map((call) => call.path);
+    assert.ok(paths.includes('/api/setup/status'), 'wizard must poll /api/setup/status');
+    assert.ok(paths.includes('/api/setup/progress'), 'wizard must poll /api/setup/progress');
+    assert.deepStrictEqual(
+      calls.filter((call) => call.method === 'POST').map((call) => call.path),
+      ['/api/setup/detect-gpu'],
+      'the pending first step must be started over HTTP'
+    );
 
-    // Execute setup.js in simulated sandbox
-    const vm = require('node:vm');
-    const sandbox = {
-      window: env.mockWindow,
-      document: env.mockDocument,
-      console: console,
-      setTimeout: setTimeout,
-      clearTimeout: clearTimeout,
-      setInterval: setInterval,
-      clearInterval: clearInterval,
-      URLSearchParams: URLSearchParams,
-      Date: Date
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(setupJsContent, sandbox);
-
-    // Allow async init to settle
-    await new Promise(r => setTimeout(r, 50));
-
-    // Verify listeners registered
-    assert.strictEqual(typeof tauriEvents['setup-progress'], 'function');
-    assert.strictEqual(typeof tauriEvents['setup-complete'], 'function');
-    assert.strictEqual(typeof tauriEvents['setup-error'], 'function');
-
-    // Verify start_setup was invoked
-    const startInvoked = tauriInvocations.some(inv => inv.cmd === 'start_setup');
-    assert.strictEqual(startInvoked, true, 'Expected start_setup command to be invoked');
+    // This page used to be driven by Tauri events on a foreign origin, where the
+    // event bridge is not connected: the bar sat at 0% forever. IPC is gone.
+    assert.deepStrictEqual(ipc.listened, [], 'wizard must not register Tauri event listeners');
+    assert.deepStrictEqual(
+      ipc.invoked.map((entry) => entry.cmd),
+      [],
+      'wizard must not invoke Tauri commands'
+    );
   });
 
-  test('Progress event updates UI elements correctly', async () => {
-    const tauriEvents = {};
-    const mockTauri = {
-      event: {
-        listen: (event, handler) => {
-          tauriEvents[event] = handler;
-          return Promise.resolve(() => {});
-        }
+  test('progress snapshot updates percent, speed, message and stepper', async () => {
+    const env = setupMockEnvironment(null);
+    await runSetupJs(env, makeFetchStub([], {
+      '/api/setup/status': {
+        complete: false,
+        running: true,
+        next_step: 'runtime',
+        state: { steps: { gpu: 'done', runtime: 'running' } }
       },
-      core: {
-        invoke: () => Promise.resolve(null)
-      }
-    };
-
-    const env = setupMockEnvironment(mockTauri);
-    const vm = require('node:vm');
-    const sandbox = {
-      window: env.mockWindow,
-      document: env.mockDocument,
-      console: console,
-      setTimeout: setTimeout,
-      clearTimeout: clearTimeout,
-      setInterval: setInterval,
-      clearInterval: clearInterval,
-      URLSearchParams: URLSearchParams,
-      Date: Date
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(setupJsContent, sandbox);
-    await new Promise(r => setTimeout(r, 30));
-
-    // Simulate setup-progress event
-    const progressHandler = tauriEvents['setup-progress'];
-    assert.strictEqual(typeof progressHandler, 'function');
-
-    progressHandler({
-      payload: {
-        stage: 'dependencies',
+      '/api/setup/progress': {
+        running: true,
+        step: 'runtime',
+        phase: 'dependencies',
         percent: 65.4,
         speed: '24.5 MB/s',
-        message: 'Downloading torch-2.3.0 wheel...'
+        message: 'Downloading torch wheel',
+        lines: [],
+        total: 0
       }
-    });
+    }));
 
     assert.strictEqual(env.elements['setup-percent-text'].textContent, '65.4%');
     assert.strictEqual(env.elements['setup-progress-bar'].style.width, '65.4%');
     assert.strictEqual(env.elements['setup-speed-text'].textContent, '24.5 MB/s');
     assert.strictEqual(env.elements['setup-speed-badge'].classList.contains('hidden'), false);
-    assert.strictEqual(env.elements['setup-status-message'].textContent, 'Downloading torch-2.3.0 wheel...');
+    assert.strictEqual(env.elements['setup-status-message'].textContent, 'Downloading torch wheel');
+    assert.strictEqual(
+      env.elements['setup-stage-title'].textContent,
+      'Installing PyTorch & AI Engine Libraries...'
+    );
 
-    // Stepper checks: Step 1 (python) and 2 (venv) completed, Step 3 (dependencies) active
+    // dependencies is stepper item 3, so 1-2 are done and models has not started.
     assert.strictEqual(env.elements['step-python'].classList.contains('completed'), true);
     assert.strictEqual(env.elements['step-venv'].classList.contains('completed'), true);
     assert.strictEqual(env.elements['step-dependencies'].classList.contains('active'), true);
+    assert.strictEqual(env.elements['step-models'].classList.contains('active'), false);
   });
 
-  test('Error event triggers error banner, logs message and expands logs drawer', async () => {
-    const tauriEvents = {};
-    const tauriInvocations = [];
-    const mockTauri = {
-      event: {
-        listen: (event, handler) => {
-          tauriEvents[event] = handler;
-          return Promise.resolve(() => {});
-        }
+  test('progress percentage never regresses', async () => {
+    const env = setupMockEnvironment(null);
+    await runSetupJs(env, makeFetchStub([], {
+      '/api/setup/status': {
+        complete: false,
+        running: true,
+        next_step: 'models',
+        state: { steps: { gpu: 'done' } }
       },
-      core: {
-        invoke: (cmd, args) => {
-          tauriInvocations.push({ cmd, args });
-          return Promise.resolve(null);
-        }
+      '/api/setup/progress': { running: true, step: 'models', percent: 65.4, lines: [], total: 0 }
+    }));
+
+    env.mockWindow.__ClaritySetup.handleProgress({
+      step: 'models',
+      percent: 20,
+      message: 'Resuming a partially downloaded file'
+    });
+
+    assert.strictEqual(env.elements['setup-percent-text'].textContent, '65.4%');
+    assert.strictEqual(env.mockWindow.__ClaritySetup.state.percent, 65.4);
+  });
+
+  test('a failed step shows the banner and Retry re-runs it over HTTP', async () => {
+    const calls = [];
+    const env = setupMockEnvironment(null);
+    await runSetupJs(env, makeFetchStub(calls, {
+      '/api/setup/status': {
+        complete: false,
+        running: false,
+        next_step: 'runtime',
+        state: { steps: { gpu: 'done', runtime: 'failed' } }
+      },
+      '/api/setup/progress': {
+        running: false,
+        step: 'runtime',
+        percent: 40,
+        error: 'Failed to extract uv package archive',
+        lines: [],
+        total: 0
       }
-    };
-
-    const env = setupMockEnvironment(mockTauri);
-    const vm = require('node:vm');
-    const sandbox = {
-      window: env.mockWindow,
-      document: env.mockDocument,
-      console: console,
-      setTimeout: setTimeout,
-      clearTimeout: clearTimeout,
-      setInterval: setInterval,
-      clearInterval: clearInterval,
-      URLSearchParams: URLSearchParams,
-      Date: Date
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(setupJsContent, sandbox);
-    await new Promise(r => setTimeout(r, 30));
-
-    // Simulate error event
-    const errorHandler = tauriEvents['setup-error'];
-    errorHandler({ payload: { error: 'Failed to extract uv package archive' } });
+    }));
 
     assert.strictEqual(env.elements['setup-error-banner'].classList.contains('hidden'), false);
-    assert.strictEqual(env.elements['setup-error-message'].textContent, 'Failed to extract uv package archive');
-    // Logs drawer should be auto-expanded
+    assert.strictEqual(
+      env.elements['setup-error-message'].textContent,
+      'Failed to extract uv package archive'
+    );
+    // The logs must open themselves: that is the only clue the user can act on.
     assert.strictEqual(env.elements['logs-drawer'].classList.contains('hidden'), false);
     assert.strictEqual(env.elements['logs-accordion'].classList.contains('open'), true);
 
-    // Click retry button
+    const before = calls.length;
     env.elements['btn-retry-setup'].click();
-    await new Promise(r => setTimeout(r, 30));
 
+    // Cleared synchronously, before the request is even sent.
     assert.strictEqual(env.elements['setup-error-banner'].classList.contains('hidden'), true);
-    const retryInvoked = tauriInvocations.some(inv => inv.cmd === 'retry_setup' || inv.cmd === 'start_setup');
-    assert.strictEqual(retryInvoked, true, 'Retry should invoke retry_setup or start_setup');
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const retry = calls.slice(before).find((call) => call.path === '/api/setup/retry');
+    assert.ok(retry, 'Retry must POST /api/setup/retry');
+    // It must resume the step that failed, not restart the whole wizard.
+    assert.strictEqual(retry.body.step, 'runtime');
   });
 
-  test('Complete event shows success banner and sets 100%', async () => {
-    const tauriEvents = {};
-    const mockTauri = {
-      event: {
-        listen: (event, handler) => {
-          tauriEvents[event] = handler;
-          return Promise.resolve(() => {});
-        }
+  test('completion fills the bar and shows the success banner', async () => {
+    const env = setupMockEnvironment(null);
+    await runSetupJs(env, makeFetchStub([], {
+      '/api/setup/status': {
+        complete: true,
+        running: false,
+        next_step: 'complete',
+        state: { steps: { gpu: 'done', runtime: 'done', models: 'done', verify: 'done' } }
       },
-      core: {
-        invoke: () => Promise.resolve(null)
-      }
-    };
-
-    const env = setupMockEnvironment(mockTauri);
-    const vm = require('node:vm');
-    const sandbox = {
-      window: env.mockWindow,
-      document: env.mockDocument,
-      console: console,
-      setTimeout: setTimeout,
-      clearTimeout: clearTimeout,
-      setInterval: setInterval,
-      clearInterval: clearInterval,
-      URLSearchParams: URLSearchParams,
-      Date: Date
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(setupJsContent, sandbox);
-    await new Promise(r => setTimeout(r, 30));
-
-    const completeHandler = tauriEvents['setup-complete'];
-    completeHandler({ payload: { port: 7860 } });
+      '/api/setup/progress': { running: false, percent: 0, lines: [], total: 0 }
+    }));
 
     assert.strictEqual(env.elements['setup-percent-text'].textContent, '100.0%');
     assert.strictEqual(env.elements['setup-progress-bar'].style.width, '100%');
     assert.strictEqual(env.elements['setup-success-banner'].classList.contains('hidden'), false);
     assert.strictEqual(env.elements['setup-error-banner'].classList.contains('hidden'), true);
+    assert.strictEqual(env.elements['step-models'].classList.contains('completed'), true);
   });
 
   test('Standalone mode initializes safely and supports log toggling', async () => {
-    // No Tauri
+    // No Tauri and no reachable wizard server: the page must still boot.
     const env = setupMockEnvironment(null);
-    const vm = require('node:vm');
-    const sandbox = {
-      window: env.mockWindow,
-      document: env.mockDocument,
-      console: console,
-      setTimeout: setTimeout,
-      clearTimeout: clearTimeout,
-      setInterval: setInterval,
-      clearInterval: clearInterval,
-      URLSearchParams: URLSearchParams,
-      Date: Date
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(setupJsContent, sandbox);
-    await new Promise(r => setTimeout(r, 30));
+    await runSetupJs(env, undefined, 30);
 
     // Test toggle logs
     assert.strictEqual(env.elements['logs-drawer'].classList.contains('hidden'), true);
@@ -386,83 +392,179 @@ describe('Desktop IPC & Notification Bridge (app.js) Unit Tests', () => {
   const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
   const appJsContent = fs.readFileSync(appJsPath, 'utf8');
 
+  /**
+   * Extract top-level helpers out of the app.js IIFE so they can be exercised in
+   * isolation. Everything in that file is indented two spaces inside the closure,
+   * and each function ends at the first line that is exactly '  }'.
+   */
+  function bridgeSource(headers) {
+    let source = '';
+    for (const header of headers) {
+      const start = appJsContent.indexOf(header);
+      assert.notStrictEqual(start, -1, 'app.js must define ' + header);
+      const end = appJsContent.indexOf('\n  }', start);
+      assert.notStrictEqual(end, -1, 'unterminated ' + header);
+      source += appJsContent.slice(start, end + 4) + '\n\n';
+    }
+    return source;
+  }
+
+  const BRIDGE_HEADERS = [
+    'function tauriInvoke()',
+    'function sendWebNotification(title, body)',
+    'async function initDesktopBridge()',
+    'function sendDesktopNotification(title, body)'
+  ];
+
   test('app.js source contains notification bridge functions', () => {
-    assert.strictEqual(appJsContent.includes('function initDesktopBridge()'), true);
-    assert.strictEqual(appJsContent.includes('function sendDesktopNotification(title, body)'), true);
-    assert.strictEqual(appJsContent.includes('window.__TAURI__.notification.sendNotification'), true);
-    assert.strictEqual(appJsContent.includes('Clarity — Render Complete'), true);
+    for (const header of BRIDGE_HEADERS) {
+      assert.ok(appJsContent.includes(header), 'app.js must define ' + header);
+    }
+    assert.ok(appJsContent.includes("'plugin:notification|notify'"));
+    assert.ok(appJsContent.includes("'plugin:notification|request_permission'"));
+    assert.ok(appJsContent.includes('Clarity — Render Complete'));
   });
 
-  test('initDesktopBridge checks and requests Tauri notification permission', async () => {
-    let permissionRequested = false;
-    let permissionChecked = false;
+  test('initDesktopBridge requests permission through IPC when running in Tauri', async () => {
+    const invoked = [];
+    const bridge = bridgeSource(BRIDGE_HEADERS);
+    const initDesktopBridge = new Function(
+      'window',
+      'Notification',
+      bridge + '\nreturn initDesktopBridge;'
+    )(
+      {
+        __TAURI__: {
+          core: {
+            invoke: (cmd, args) => {
+              invoked.push({ cmd, args });
+              return Promise.resolve('granted');
+            }
+          }
+        }
+      },
+      undefined
+    );
 
-    const mockTauri = {
-      notification: {
-        isPermissionGranted: () => {
-          permissionChecked = true;
-          return Promise.resolve(false);
-        },
+    await initDesktopBridge();
+
+    assert.deepStrictEqual(
+      invoked.map((call) => call.cmd),
+      ['plugin:notification|request_permission'],
+      'the desktop build must ask the notification plugin, not the browser'
+    );
+  });
+
+  test('initDesktopBridge asks the browser for permission without Tauri', async () => {
+    let requested = false;
+    const bridge = bridgeSource(BRIDGE_HEADERS);
+    const initDesktopBridge = new Function(
+      'window',
+      'Notification',
+      bridge + '\nreturn initDesktopBridge;'
+    )(
+      {},
+      {
+        permission: 'default',
         requestPermission: () => {
-          permissionRequested = true;
+          requested = true;
           return Promise.resolve('granted');
-        },
-        sendNotification: () => {}
-      }
-    };
-
-    // Extract initDesktopBridge function and test its logic
-    const initMatch = appJsContent.match(/async function initDesktopBridge\(\) \{[\s\S]*?\n  \}/);
-    assert.ok(initMatch, 'Should find initDesktopBridge in app.js');
-
-    const fn = new Function('window', `return (${initMatch[0]});`)(({ __TAURI__: mockTauri }));
-    await fn();
-
-    assert.strictEqual(permissionChecked, true, 'Should check if permission is granted');
-    assert.strictEqual(permissionRequested, true, 'Should request permission if not granted');
-  });
-
-  test('sendDesktopNotification invokes Tauri sendNotification', () => {
-    const sentNotifications = [];
-
-    const mockTauri = {
-      notification: {
-        sendNotification: (options) => {
-          sentNotifications.push(options);
         }
       }
-    };
+    );
 
-    const sendMatch = appJsContent.match(/function sendDesktopNotification\(title, body\) \{[\s\S]*?\n  \}/);
-    assert.ok(sendMatch, 'Should find sendDesktopNotification in app.js');
-
-    const fn = new Function('window', `return (${sendMatch[0]});`)(({ __TAURI__: mockTauri }));
-    fn('Clarity — Render Complete', 'Video "test.mp4" has finished processing!');
-
-    assert.strictEqual(sentNotifications.length, 1);
-    assert.strictEqual(sentNotifications[0].title, 'Clarity — Render Complete');
-    assert.strictEqual(sentNotifications[0].body, 'Video "test.mp4" has finished processing!');
+    await initDesktopBridge();
+    assert.strictEqual(requested, true);
   });
 
-  test('sendDesktopNotification falls back to window.__TAURI__.core.invoke if notification object is missing', async () => {
+  test('sendDesktopNotification prefers the notification plugin IPC command', async () => {
     const invokedCommands = [];
+    const webNotifications = [];
 
-    const mockTauri = {
-      core: {
-        invoke: (cmd, args) => {
-          invokedCommands.push({ cmd, args });
-          return Promise.resolve();
+    function NotificationMock(title, options) {
+      webNotifications.push({ title, body: options.body });
+    }
+    NotificationMock.permission = 'granted';
+
+    const bridge = bridgeSource(BRIDGE_HEADERS);
+    const sendDesktopNotification = new Function(
+      'window',
+      'Notification',
+      bridge + '\nreturn sendDesktopNotification;'
+    )(
+      {
+        __TAURI__: {
+          core: {
+            invoke: (cmd, args) => {
+              invokedCommands.push({ cmd, args });
+              return Promise.resolve();
+            }
+          }
         }
-      }
-    };
+      },
+      NotificationMock
+    );
 
-    const sendMatch = appJsContent.match(/function sendDesktopNotification\(title, body\) \{[\s\S]*?\n  \}/);
-    const fn = new Function('window', `return (${sendMatch[0]});`)(({ __TAURI__: mockTauri }));
-    fn('Clarity — Render Complete', 'Render finished');
+    sendDesktopNotification('Clarity — Render Complete', 'Render finished');
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     assert.strictEqual(invokedCommands.length, 1);
     assert.strictEqual(invokedCommands[0].cmd, 'plugin:notification|notify');
     assert.strictEqual(invokedCommands[0].args.options.title, 'Clarity — Render Complete');
+    assert.strictEqual(invokedCommands[0].args.options.body, 'Render finished');
+    assert.strictEqual(webNotifications.length, 0, 'native toast must win over the browser API');
+  });
+
+  test('sendDesktopNotification falls back to the web Notification API without usable IPC', () => {
+    const shown = [];
+
+    function NotificationMock(title, options) {
+      shown.push({ title, body: options.body });
+    }
+    NotificationMock.permission = 'granted';
+
+    const bridge = bridgeSource(BRIDGE_HEADERS);
+    const sendDesktopNotification = new Function(
+      'window',
+      'Notification',
+      bridge + '\nreturn sendDesktopNotification;'
+    )({ __TAURI__: {} }, NotificationMock);
+
+    sendDesktopNotification('Clarity — Render Complete', 'Video finished');
+
+    assert.strictEqual(shown.length, 1);
+    assert.strictEqual(shown[0].title, 'Clarity — Render Complete');
+    assert.strictEqual(shown[0].body, 'Video finished');
+  });
+
+  test('a rejected native toast still produces a browser notification', async () => {
+    const shown = [];
+
+    function NotificationMock(title, options) {
+      shown.push({ title, body: options.body });
+    }
+    NotificationMock.permission = 'granted';
+
+    const bridge = bridgeSource(BRIDGE_HEADERS);
+    const sendDesktopNotification = new Function(
+      'window',
+      'Notification',
+      bridge + '\nreturn sendDesktopNotification;'
+    )(
+      {
+        __TAURI__: {
+          core: {
+            invoke: () => Promise.reject(new Error('ACL denied for this origin'))
+          }
+        }
+      },
+      NotificationMock
+    );
+
+    sendDesktopNotification('Clarity — Render Complete', 'Fallback body');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.strictEqual(shown.length, 1, 'a denied plugin permission must not swallow the notice');
+    assert.strictEqual(shown[0].body, 'Fallback body');
   });
 });
-
