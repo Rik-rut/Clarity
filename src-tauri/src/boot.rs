@@ -7,6 +7,7 @@
 //! to show, so a failed start looked like a frozen application.
 
 use serde::Serialize;
+use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, navigate_window};
@@ -45,6 +46,33 @@ fn report(app: &AppHandle, message: impl Into<String>) {
     );
 }
 
+/// Appends one timestamped line to `logs\boot.log`.
+///
+/// Windowed builds have no stderr, so without this a shell-side death is
+/// invisible. Best-effort by design: boot diagnostics must never fail boot.
+pub fn append_boot_log(data_dir: &Path, message: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{ts} pid={}] {message}\n", std::process::id());
+    let _ = std::fs::create_dir_all(data_dir.join("logs"));
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir.join("logs").join("boot.log"))
+    {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// Shorthand: log to the data dir captured in state.
+fn boot_log(app: &AppHandle, message: &str) {
+    let dir = app.state::<AppState>().app_data_dir().to_path_buf();
+    append_boot_log(&dir, message);
+}
+
 /// Surfaces a fatal startup failure on the boot shell.
 pub fn fail(app: &AppHandle, message: impl Into<String>) {
     let message = message.into();
@@ -53,6 +81,7 @@ pub fn fail(app: &AppHandle, message: impl Into<String>) {
         state.app_data_dir().join("logs").to_string_lossy().to_string()
     };
     eprintln!("[clarity] startup failed: {message}");
+    boot_log(app, &format!("fatal: {message}"));
 
     let _ = app.emit(
         BOOT_ERROR_EVENT,
@@ -71,8 +100,10 @@ pub fn fail(app: &AppHandle, message: impl Into<String>) {
 
 /// Picks the launch path. Failures are reported on the shell, never swallowed.
 pub async fn start(app: AppHandle) {
+    boot_log(&app, "boot start");
     if !app.state::<AppState>().try_begin_boot() {
         report(&app, "Startup is already running — please wait…");
+        boot_log(&app, "boot already running; ignoring duplicate start");
         return;
     }
 
@@ -107,9 +138,15 @@ async fn boot_sequence(app: &AppHandle) -> Result<(), String> {
 
     // A repository checkout already has a working venv; provisioning there would
     // be wrong and slow, so the development flow launches directly.
+    boot_log(
+        app,
+        &format!("setup verdict: provisioned={provisioned} dev_env={dev_flow}"),
+    );
     if provisioned || dev_flow {
+        boot_log(app, "setup verdict: launching studio directly");
         return launch_studio(app).await;
     }
+    boot_log(app, "setup verdict: provisioning required");
 
     provision(app).await?;
     launch_studio(app).await
@@ -133,8 +170,18 @@ async fn launch_studio(app: &AppHandle) -> Result<(), String> {
 
     let url = format!("http://127.0.0.1:{port}/");
     report(app, "Opening Clarity Studio");
-    navigate_window(app, &url)
-        .map_err(|err| format!("The studio server is running, but the window could not open it: {err}"))
+    match navigate_window(app, &url) {
+        Ok(()) => {
+            boot_log(app, &format!("window navigated to {url}"));
+            Ok(())
+        }
+        Err(err) => {
+            boot_log(app, &format!("window navigation failed: {err}"));
+            Err(format!(
+                "The studio server is running, but the window could not open it: {err}"
+            ))
+        }
+    }
 }
 
 const BOOT_PROGRESS_EVENT: &str = "boot-progress";
@@ -165,7 +212,7 @@ async fn provision(app: &AppHandle) -> Result<(), String> {
 
     report(app, "Installing the Python runtime…");
     let handle = app.clone();
-    let python = setup::ensure_python_runtime(&data_dir, &resources_dir, move |event| {
+    let python = match setup::ensure_python_runtime(&data_dir, &resources_dir, move |event| {
         let message = if event.speed.trim().is_empty() {
             event.message.clone()
         } else {
@@ -174,9 +221,22 @@ async fn provision(app: &AppHandle) -> Result<(), String> {
         report(&handle, message);
     })
     .await
-    .map_err(|err| format!("Could not install the Python runtime: {err}"))?;
+    {
+        Ok(python) => {
+            boot_log(
+                app,
+                &format!("python runtime ready: {}", python.display()),
+            );
+            python
+        }
+        Err(err) => {
+            boot_log(app, &format!("python runtime failed: {err}"));
+            return Err(format!("Could not install the Python runtime: {err}"));
+        }
+    };
 
     report(app, "Installing the AI engine…");
+    boot_log(app, "provision start");
     let cmd = process::build_provision_command(&python, &data_dir, &resources_dir, "essential", "auto")?;
     let log_path = data_dir.join("logs").join("provision.log");
     let handle = app.clone();
@@ -198,10 +258,12 @@ async fn provision(app: &AppHandle) -> Result<(), String> {
     .map_err(|err| format!("{err}\n\nLog: {}", log_path.display()))?;
 
     if !setup::is_setup_complete(&data_dir) {
+        boot_log(app, "provision finish: runtime incomplete");
         return Err(format!(
             "Provisioning finished but the runtime is incomplete. See {}",
             log_path.display()
         ));
     }
+    boot_log(app, "provision finish: setup complete");
     Ok(())
 }

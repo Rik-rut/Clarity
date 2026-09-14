@@ -68,16 +68,66 @@ pub async fn launch_backend_internal(
         return Ok(state.port());
     }
 
-    let port = process::find_available_port(7860, 50)
-        .ok_or_else(|| "Failed to find available TCP port between 7860 and 7910".to_string())?;
-
     // Re-resolved: first-run provisioning may have moved the data root to the
     // drive the user picked, and the backend must see that, not the startup one.
     let data_dir = AppState::default_app_data_dir();
+
+    // Stale-backend recovery: a previous shell may have died leaving its
+    // backend behind, or the user may run their own server on the configured
+    // port. Adopt a healthy backend, fail loudly on a foreign holder, else
+    // fall through to the normal strict-port spawn path. Never kill the
+    // holder: it may not be ours.
+    let configured = state.port();
+    if process::is_port_occupied(configured) {
+        let health = process::probe_backend_health(configured).await;
+        match process::classify_port_holder(true, || health) {
+            process::PortHolderDecision::Adopt => {
+                crate::boot::append_boot_log(
+                    &data_dir,
+                    &format!("adopted healthy backend on port {configured}"),
+                );
+                state.set_port(configured);
+                return Ok(configured);
+            }
+            process::PortHolderDecision::OccupiedByForeign => {
+                let msg = format!(
+                    "Port {configured} is already in use by another application. \
+                     Close it (or point Clarity at a free port) and retry."
+                );
+                crate::boot::append_boot_log(&data_dir, &msg);
+                return Err(msg);
+            }
+            process::PortHolderDecision::Spawn => {
+                crate::boot::append_boot_log(
+                    &data_dir,
+                    &format!(
+                        "port {configured} occupied but holder unhealthy; spawning via strict-port path"
+                    ),
+                );
+            }
+        }
+    }
+
+    let port = process::find_available_port(7860, 50)
+        .ok_or_else(|| "Failed to find available TCP port between 7860 and 7910".to_string())?;
+
     let mut manager = BackendProcessManager::spawn(port, &data_dir, state.resources_dir()).await?;
+    crate::boot::append_boot_log(
+        &data_dir,
+        &format!("backend spawned pid={:?} port={port}", manager.child_id()),
+    );
 
     // The error already names the log file; wrapping it again only hides it.
-    manager.wait_until_ready(ready_timeout_secs).await?;
+    // Logged verbatim: the message itself says ready, early-exit, or timeout.
+    match manager.wait_until_ready(ready_timeout_secs).await {
+        Ok(()) => {
+            crate::boot::append_boot_log(&data_dir, &format!("backend ready on port {port}"));
+        }
+        Err(err) => {
+            crate::boot::append_boot_log(&data_dir, &format!("backend not ready: {err}"));
+            return Err(err);
+        }
+    }
 
     state.set_backend_manager(manager);
     Ok(port)

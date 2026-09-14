@@ -31,6 +31,83 @@ pub fn find_available_port(start: u16, max_attempts: u16) -> Option<u16> {
     None
 }
 
+/// What answered (or didn't) on an occupied port's `/api/health` probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthProbeOutcome {
+    /// Our backend answered with its liveness payload: safe to adopt.
+    Healthy,
+    /// Nothing answered: dead holder or zombie socket.
+    Unreachable,
+    /// Something answered that is not our backend (e.g. a dev server).
+    Foreign,
+}
+
+/// What boot should do about the configured port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortHolderDecision {
+    /// Port is free, or its holder is dead: run the normal strict-port spawn path.
+    Spawn,
+    /// A healthy Clarity backend already owns the port: navigate to it.
+    Adopt,
+    /// Another application owns the port: fail loudly instead of colliding.
+    OccupiedByForeign,
+}
+
+/// Decides adopt-vs-spawn-vs-error for the configured port without touching
+/// the network itself: `probe` runs only when the port is occupied, so tests
+/// stub it and production passes the real `/api/health` check.
+///
+/// Never returns "kill the holder": an occupied port may belong to the user's
+/// own dev server, which the shell must not terminate.
+pub fn classify_port_holder(
+    port_occupied: bool,
+    probe: impl FnOnce() -> HealthProbeOutcome,
+) -> PortHolderDecision {
+    if !port_occupied {
+        return PortHolderDecision::Spawn;
+    }
+    match probe() {
+        HealthProbeOutcome::Healthy => PortHolderDecision::Adopt,
+        HealthProbeOutcome::Unreachable => PortHolderDecision::Spawn,
+        HealthProbeOutcome::Foreign => PortHolderDecision::OccupiedByForeign,
+    }
+}
+
+/// True when nothing can bind `port` on loopback right now.
+pub fn is_port_occupied(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+
+/// Probes `http://127.0.0.1:{port}/api/health` to decide whether the process
+/// holding the port is our backend. Short timeout: boot must not stall on it.
+///
+/// Only a 2xx carrying our `{"status": "ok"}` liveness payload counts as
+/// healthy — anything else that answers is treated as foreign, so the shell
+/// never adopts a stranger's server.
+pub async fn probe_backend_health(port: u16) -> HealthProbeOutcome {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return HealthProbeOutcome::Unreachable,
+    };
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let response = match client.get(&url).send().await {
+        Ok(response) => response,
+        Err(_) => return HealthProbeOutcome::Unreachable,
+    };
+    if !response.status().is_success() {
+        return HealthProbeOutcome::Foreign;
+    }
+    match response.json::<serde_json::Value>().await {
+        Ok(body) if body.get("status") == Some(&serde_json::Value::from("ok")) => {
+            HealthProbeOutcome::Healthy
+        }
+        _ => HealthProbeOutcome::Foreign,
+    }
+}
+
 /// Resolves the Python interpreter used to run the studio backend.
 ///
 /// Priority:
@@ -340,6 +417,11 @@ impl BackendProcessManager {
         })
     }
 
+    /// OS process id of the backend child, for the boot log.
+    pub fn child_id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     /// Polls `http://127.0.0.1:{port}/api/health` until it answers, the backend
     /// process dies, or the timeout elapses.
     ///
@@ -455,6 +537,35 @@ mod tests {
         let found = find_available_port(65535, 10);
         // Should not panic on overflow
         assert!(found.is_some() || found.is_none());
+    }
+
+    #[test]
+    fn test_classify_free_port_skips_probe_and_spawns() {
+        // A free port must never trigger a network probe: the stub panics if called.
+        let decision = classify_port_holder(false, || panic!("probe must not run on a free port"));
+        assert_eq!(decision, PortHolderDecision::Spawn);
+    }
+
+    #[test]
+    fn test_classify_healthy_holder_is_adopted() {
+        let decision = classify_port_holder(true, || HealthProbeOutcome::Healthy);
+        assert_eq!(decision, PortHolderDecision::Adopt);
+    }
+
+    #[test]
+    fn test_classify_dead_holder_falls_through_to_spawn_path() {
+        // A dead holder answers nothing: proceed to the strict-port spawn path,
+        // which errors loudly if the port is still held.
+        let decision = classify_port_holder(true, || HealthProbeOutcome::Unreachable);
+        assert_eq!(decision, PortHolderDecision::Spawn);
+    }
+
+    #[test]
+    fn test_classify_foreign_holder_is_an_error_not_a_spawn() {
+        // Another app's server (e.g. a dev server): fail loudly instead of
+        // colliding with it — and never kill the foreign holder.
+        let decision = classify_port_holder(true, || HealthProbeOutcome::Foreign);
+        assert_eq!(decision, PortHolderDecision::OccupiedByForeign);
     }
 
     #[test]

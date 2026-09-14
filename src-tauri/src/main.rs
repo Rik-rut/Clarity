@@ -23,6 +23,12 @@ fn main() {
         // Must be registered first: a second launch focuses the running window
         // instead of spawning a second backend on another port.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // The exiting second launch is otherwise fully silent; leave a
+            // trace so "won't open" reports can distinguish handoff from death.
+            boot::append_boot_log(
+                &state::AppState::default_app_data_dir(),
+                "second launch handed off to the running instance",
+            );
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
