@@ -635,6 +635,9 @@ document.addEventListener('DOMContentLoaded', () => {
   async function handleDeleteVideo(vid, folder) {
     const loc = folder ? 'output folder' : 'input folder';
     if (!confirm(`Delete "${vid.name}" from ${loc}?`)) return;
+    // Unload output previews FIRST: an open 206 stream handle locks the file
+    // on Windows and DELETE would fail with WinError 32. Input preview kept.
+    clearPreview(false);
     try {
       const resp = await fetch('/api/videos/delete', {
         method: 'POST',
@@ -2167,7 +2170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     elems.btnCancel.addEventListener('click', async () => {
       if (!state.activeJob) return;
       try {
-        const resp = await fetch(`/api/jobs/cancel/${state.activeJob.job_id}`, { method: 'POST' });
+        const resp = await fetch(`/api/jobs/${state.activeJob.job_id}/cancel`, { method: 'POST' });
         const data = await resp.json();
         if (data.success) {
           showToast('Job cancellation requested', 'info');
@@ -2186,7 +2189,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function resetRenderUI() {
     if (elems.btnRender) elems.btnRender.classList.remove('hidden');
-    if (elems.btnCancel) elems.btnCancel.classList.remove('hidden');
+    if (elems.btnCancel) elems.btnCancel.classList.add('hidden');
     if (elems.renderProgressCard) elems.renderProgressCard.classList.add('hidden');
   }
 
@@ -2483,12 +2486,21 @@ document.addEventListener('DOMContentLoaded', () => {
           if (elems.progressFileInfo) elems.progressFileInfo.textContent = `[${job.current_file_index}/${job.total_files}] ${job.current_file_name || ''}`;
           if (elems.progressElapsed) elems.progressElapsed.textContent = job.elapsed_formatted;
           if (elems.progressEta) elems.progressEta.textContent = job.eta_formatted;
+        } else if (data.type === 'job_cancelled') {
+          state.activeJob = null;
+          resetRenderUI();
+          updateMaRenderButton();
+          showToast('Render cancelled', 'info');
         } else if (data.type === 'job_completed') {
           const job = data.job;
           state.activeJob = null;
           resetRenderUI();
           updateMaRenderButton();
           if (job.status === 'completed') {
+            // Queue is done: clear the selection so Cancel/queue don't linger.
+            // On failure the selection is kept so the user can retry.
+            state.selectedVideos = [];
+            updateQueueUI();
             if (elems.renderCompletedBanner) elems.renderCompletedBanner.classList.remove('hidden');
             if (elems.renderTotalTime) elems.renderTotalTime.textContent = `Render completed in ${job.elapsed_formatted}`;
             showToast(`Render finished in ${job.elapsed_formatted}!`, 'success');

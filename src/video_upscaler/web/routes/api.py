@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -282,11 +284,25 @@ def delete_video(req: DeleteVideoRequest) -> Dict[str, Any]:
     target_path = (target_dir / req.video_name).resolve()
     if not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail=f"Video '{req.video_name}' not found")
-    try:
-        target_path.unlink()
-        return {"success": True, "deleted": req.video_name}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to delete file: {exc}")
+    # A just-rendered file can still hold an open 206 stream handle, which
+    # locks it on Windows (WinError 32). Retry transient locks briefly.
+    for attempt in range(3):
+        try:
+            target_path.unlink()
+            return {"success": True, "deleted": req.video_name}
+        except OSError as exc:
+            if not _is_file_lock_error(exc) or attempt >= 2:
+                raise HTTPException(status_code=500, detail=f"Failed to delete file: {exc}")
+            time.sleep(0.2)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to delete file: {exc}")
+
+
+def _is_file_lock_error(exc: OSError) -> bool:
+    """True for Windows file-lock errors (WinError 32 / EACCES / EPERM)."""
+    if getattr(exc, "winerror", None) == 32:
+        return True
+    return exc.errno in (errno.EACCES, errno.EPERM)
 
 
 @router.post("/videos/clear")

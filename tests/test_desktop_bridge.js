@@ -191,3 +191,72 @@ describe('Desktop IPC & Notification Bridge (app.js) Unit Tests', () => {
     assert.strictEqual(shown[0].body, 'Fallback body');
   });
 });
+
+describe('Render queue lifecycle (Phase C)', () => {
+  const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
+  const src = fs.readFileSync(appJsPath, 'utf8');
+
+  // Same extraction strategy as the bridge suite: app.js internals live two
+  // spaces deep, each function ending at the first line that is exactly '  }'.
+  function extractFn(header) {
+    const start = src.indexOf(header);
+    assert.notStrictEqual(start, -1, 'app.js must define ' + header);
+    const end = src.indexOf('\n  }', start);
+    assert.notStrictEqual(end, -1, 'unterminated ' + header);
+    return src.slice(start, end + 4);
+  }
+
+  test('done-state hides Cancel (resetRenderUI)', () => {
+    const fnSrc = extractFn('function resetRenderUI()');
+    function makeEl() {
+      const added = [];
+      const removed = [];
+      return { added, removed, classList: { add: (c) => added.push(c), remove: (c) => removed.push(c) } };
+    }
+    const btnRender = makeEl();
+    const btnCancel = makeEl();
+    const renderProgressCard = makeEl();
+    const resetRenderUI = new Function('elems', fnSrc + '\nreturn resetRenderUI;')({
+      btnRender,
+      btnCancel,
+      renderProgressCard
+    });
+
+    resetRenderUI();
+
+    assert.ok(btnCancel.added.includes('hidden'), 'Cancel must be hidden after reset');
+    assert.ok(!btnCancel.removed.includes('hidden'), 'reset must not re-show Cancel');
+  });
+
+  test('cancel click hits /api/jobs/${id}/cancel', () => {
+    assert.ok(
+      src.includes('/api/jobs/${state.activeJob.job_id}/cancel'),
+      'cancel must POST to /api/jobs/${id}/cancel'
+    );
+    assert.ok(!src.includes('/api/jobs/cancel/'), 'old /api/jobs/cancel/${id} route must be gone');
+  });
+
+  test('job_cancelled resets UI and clears the active job', () => {
+    assert.ok(src.includes('job_cancelled'), 'ws handler must handle job_cancelled');
+    const idx = src.indexOf('job_cancelled');
+    const region = src.slice(idx, idx + 800);
+    assert.ok(region.includes('state.activeJob'), 'cancelled branch must clear state.activeJob');
+    assert.ok(region.includes('resetRenderUI'), 'cancelled branch must reset the render UI');
+  });
+
+  test('completed clears the queue selection (failed keeps it)', () => {
+    const idx = src.indexOf("data.type === 'job_completed'");
+    assert.notStrictEqual(idx, -1, 'ws handler must handle job_completed');
+    const region = src.slice(idx, idx + 3000);
+    assert.ok(region.includes('state.selectedVideos = []'), 'completed must clear selectedVideos');
+    assert.ok(region.includes('updateQueueUI'), 'completed must re-render the queue UI');
+  });
+
+  test('delete unloads the preview BEFORE issuing DELETE', () => {
+    const fnSrc = extractFn('async function handleDeleteVideo(');
+    const fetchIdx = fnSrc.indexOf('/api/videos/delete');
+    assert.notStrictEqual(fetchIdx, -1, 'handleDeleteVideo must call the delete endpoint');
+    const before = fnSrc.slice(0, fetchIdx);
+    assert.ok(before.includes('clearPreview'), 'preview must be unloaded before DELETE');
+  });
+});
