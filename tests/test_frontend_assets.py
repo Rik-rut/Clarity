@@ -153,6 +153,21 @@ def test_desktop_shell_is_the_tauri_frontend():
     assert "/api/" not in html + js
 
 
+def test_desktop_shell_renders_provisioning_progress():
+    html = _read(TAURI_DIR / "shell" / "index.html")
+    js = _read(TAURI_DIR / "shell" / "shell.js")
+
+    for element in ('id="progress"', 'id="progress-bar"', 'id="progress-percent"',
+                    'id="progress-phase"', 'id="progress-log"'):
+        assert element in html, f"shell must render {element}"
+
+    assert "'boot-progress'" in js, "the shell must listen for progress events"
+    assert "showProgress" in js
+    # The shell still owns no product logic: no API calls, no fetch.
+    assert "/api/" not in js
+    assert "fetch(" not in js
+
+
 def test_window_uses_html5_drag_and_drop():
     """Tauri's native drag-drop handler swallows HTML5 drag events on WebView2."""
     config = json.loads(_read(TAURI_DIR / "tauri.conf.json"))
