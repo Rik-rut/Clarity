@@ -2331,6 +2331,49 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   updateMaRenderButton();
 
+  // Desktop IPC Bridge & Notification Support
+  async function initDesktopBridge() {
+    try {
+      if (window.__TAURI__) {
+        console.log('Clarity running inside Tauri desktop shell');
+        if (window.__TAURI__.notification && typeof window.__TAURI__.notification.isPermissionGranted === 'function') {
+          let granted = await window.__TAURI__.notification.isPermissionGranted();
+          if (!granted && typeof window.__TAURI__.notification.requestPermission === 'function') {
+            const res = await window.__TAURI__.notification.requestPermission();
+            granted = res === 'granted';
+          }
+        }
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
+    } catch (e) {
+      console.debug('Desktop notification permission check:', e);
+    }
+  }
+
+  function sendDesktopNotification(title, body) {
+    try {
+      if (window.__TAURI__ && window.__TAURI__.notification && typeof window.__TAURI__.notification.sendNotification === 'function') {
+        window.__TAURI__.notification.sendNotification({ title, body });
+        return;
+      }
+      if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+        window.__TAURI__.core.invoke('plugin:notification|notify', { options: { title, body } })
+          .catch(() => {
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              new Notification(title, { body });
+            }
+          });
+        return;
+      }
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(title, { body });
+      }
+    } catch (e) {
+      console.debug('Failed to send desktop notification:', e);
+    }
+  }
+
   // 15. WebSocket Progress Broadcasting
   function connectWebSocket() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2360,6 +2403,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (elems.renderCompletedBanner) elems.renderCompletedBanner.classList.remove('hidden');
             if (elems.renderTotalTime) elems.renderTotalTime.textContent = `Render completed in ${job.elapsed_formatted}`;
             showToast(`Render finished in ${job.elapsed_formatted}!`, 'success');
+
+            // Desktop notification IPC bridge
+            const videoName = job.current_file_name ||
+              (job.output_files && job.output_files.length > 0 ? job.output_files[0].replace(/^.*[\\/]/, '') : 'render');
+            sendDesktopNotification(
+              'Clarity — Render Complete',
+              `Video "${videoName}" has finished processing!`
+            );
+            if (window.__TAURI__ && window.__TAURI__.notification) {
+              if (data.stage === 'completed') {
+                window.__TAURI__.notification.sendNotification({
+                  title: 'Clarity — Render Complete',
+                  body: `Video "${data.video_name || videoName}" has finished processing!`
+                });
+              }
+            }
+
             if (job.output_files && job.output_files.length > 0 && elems.videoRight) {
               let outPath = job.output_files[0];
               if (state.activeTab === 'matanyone') {
@@ -2388,6 +2448,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Initialize
+  initDesktopBridge();
   loadSystemInfo();
   loadVideos();
   connectWebSocket();
