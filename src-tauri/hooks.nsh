@@ -84,3 +84,45 @@ Var TensorrtChoice
     MessageBox MB_OK|MB_ICONSTOP "Clarity was installed, but its AI engine could not be set up (code $0).$\n$\nClarity will finish the setup when you next start it.$\nLog: $DataDir\logs\provision.log"
   clarity_hook_done:
 !macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  DetailPrint "Removing Clarity..."
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; An update runs the uninstaller before installing the new files. Deleting the
+  ; engine there would turn every update into a multi-gigabyte re-download.
+  ${If} $UpdateMode = 1
+    DetailPrint "Update mode: keeping the AI engine and models."
+    Goto clarity_uninstall_done
+  ${EndIf}
+
+  ; Regenerable data. An installer can fetch all of this again, and leaving it
+  ; behind is precisely the bloat the single-directory layout is meant to avoid.
+  RMDir /r "$INSTDIR\python"
+  RMDir /r "$INSTDIR\env"
+  RMDir /r "$INSTDIR\models"
+  RMDir /r "$INSTDIR\tools"
+  RMDir /r "$INSTDIR\.cache"
+  RMDir /r "$INSTDIR\logs"
+  Delete "$INSTDIR\setup.json"
+  Delete "$INSTDIR\.setup_complete"
+  Delete "$INSTDIR\.provisioning.lock"
+  Delete "$INSTDIR\.clarity-write-test"
+
+  ; User media is not ours to delete silently.
+  ${If} $DeleteAppDataCheckboxState = 1
+    RMDir /r "$INSTDIR\input"
+    RMDir /r "$INSTDIR\output"
+    RMDir /r "$LOCALAPPDATA\Clarity"
+  ${Else}
+    MessageBox MB_YESNO|MB_ICONQUESTION "Delete your Clarity videos as well?$\n$\n$INSTDIR\input$INSTDIR\output" IDNO clarity_keep_media
+      RMDir /r "$INSTDIR\input"
+      RMDir /r "$INSTDIR\output"
+    clarity_keep_media:
+  ${EndIf}
+
+  RMDir "$INSTDIR"
+  DetailPrint "Clarity data removed."
+  clarity_uninstall_done:
+!macroend
