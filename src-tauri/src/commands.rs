@@ -33,16 +33,17 @@ pub fn navigate_window(app: &AppHandle, target: &str) -> Result<(), String> {
         .or_else(|| app.webview_windows().into_values().next())
         .ok_or_else(|| "No webview window found".to_string())?;
 
-    if let Ok(url) = target.parse() {
-        let _ = window.navigate(url);
+    if let Ok(url) = target.parse::<tauri::Url>() {
+        window
+            .navigate(url)
+            .map_err(|e| format!("Navigation failed: {e}"))
+    } else {
+        let escaped = serde_json::to_string(target).unwrap_or_else(|_| format!("\"{}\"", target));
+        let js = format!("window.location.href = {};", escaped);
+        window
+            .eval(&js)
+            .map_err(|e| format!("Failed to evaluate navigation script: {e}"))
     }
-
-    let js = format!("window.location.href = '{}';", target);
-    window
-        .eval(&js)
-        .map_err(|e| format!("Failed to evaluate navigation script: {}", e))?;
-
-    Ok(())
 }
 
 /// Pure implementation of setup status query.
@@ -150,24 +151,30 @@ pub async fn start_setup(app: AppHandle, state: State<'_, AppState>) -> Result<(
         if let Some(state) = app_handle.try_state::<AppState>() {
             state.set_setup_running(false);
             match res {
-                Ok(()) => {
-                    state.set_setup_complete(true);
-                    let port = match launch_backend_internal(&state).await {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("Backend launch after setup failed: {}", e);
-                            state.port()
-                        }
-                    };
-                    let _ = app_handle.emit(
-                        "setup-complete",
-                        serde_json::json!({
-                            "complete": true,
-                            "port": port,
-                            "url": format!("http://127.0.0.1:{}", port),
-                        }),
-                    );
-                }
+                Ok(()) => match launch_backend_internal(&state).await {
+                    Ok(port) => {
+                        state.set_setup_complete(true);
+                        let _ = app_handle.emit(
+                            "setup-complete",
+                            serde_json::json!({
+                                "complete": true,
+                                "port": port,
+                                "url": format!("http://127.0.0.1:{}", port),
+                            }),
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("Backend launch after setup failed: {}", err);
+                        let err_msg = format!("Setup completed, but failed to launch backend server: {}", err);
+                        let _ = app_handle.emit(
+                            "setup-error",
+                            serde_json::json!({
+                                "error": err_msg,
+                                "message": err_msg,
+                            }),
+                        );
+                    }
+                },
                 Err(err) => {
                     let _ = app_handle.emit(
                         "setup-error",
@@ -331,5 +338,33 @@ mod tests {
         assert!(!state.is_setup_running());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_navigate_target_url_vs_relative_path() {
+        // Standard absolute HTTP/HTTPS URLs parse as tauri::Url
+        let valid_url = "http://127.0.0.1:7860/api";
+        assert!(valid_url.parse::<tauri::Url>().is_ok());
+
+        let valid_tauri_url = "tauri://localhost/setup.html";
+        assert!(valid_tauri_url.parse::<tauri::Url>().is_ok());
+
+        // Relative routes do not parse as tauri::Url and must use escaped JS eval
+        let rel_path = "setup.html";
+        assert!(rel_path.parse::<tauri::Url>().is_err());
+
+        let rel_slash_path = "/setup.html?retry=1";
+        assert!(rel_slash_path.parse::<tauri::Url>().is_err());
+    }
+
+    #[test]
+    fn test_escape_relative_path_for_js() {
+        let tricky_target = "setup.html?msg=hello\"world'&foo=bar";
+        let escaped = serde_json::to_string(tricky_target).unwrap();
+        let js = format!("window.location.href = {};", escaped);
+        // Ensure proper quotes and escaped quotes in JS string
+        assert!(js.starts_with("window.location.href = \""));
+        assert!(js.contains(r#"\"world"#));
+        assert!(js.ends_with("\";"));
     }
 }

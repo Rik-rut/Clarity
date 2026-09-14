@@ -28,21 +28,28 @@ fn main() {
             let is_complete = setup::is_setup_complete(&app_data_dir);
 
             tauri::async_runtime::spawn(async move {
+                // Yield briefly to ensure webview window attachment on cold start
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
                 if is_complete {
                     if let Some(state) = app_handle.try_state::<state::AppState>() {
                         match commands::launch_backend_internal(&state).await {
                             Ok(port) => {
                                 let url = format!("http://127.0.0.1:{}", port);
-                                let _ = commands::navigate_window(&app_handle, &url);
+                                if let Err(e) = commands::navigate_window(&app_handle, &url) {
+                                    eprintln!("Failed to navigate window to backend URL {}: {}", url, e);
+                                }
                             }
                             Err(err) => {
-                                eprintln!("Failed to launch backend: {}", err);
-                                let _ = commands::navigate_window(&app_handle, "setup.html");
+                                eprintln!("Failed to launch backend on startup: {}", err);
+                                if let Err(e) = commands::navigate_window(&app_handle, "setup.html") {
+                                    eprintln!("Failed to navigate window to setup.html: {}", e);
+                                }
                             }
                         }
                     }
-                } else {
-                    let _ = commands::navigate_window(&app_handle, "setup.html");
+                } else if let Err(e) = commands::navigate_window(&app_handle, "setup.html") {
+                    eprintln!("Failed to navigate window to setup.html: {}", e);
                 }
             });
 
