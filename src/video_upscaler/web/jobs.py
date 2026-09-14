@@ -277,6 +277,16 @@ class JobManager:
             elif job.action == "Slow-motion":
                 model_key = params.get("model_key", "AMT-S")
                 factor = int(params.get("factor", 2))
+                # First-use recovery: fetch the requested AMT checkpoint
+                # from the hub before processing (no-op when installed).
+                # download_amt_model takes no progress callback, so this
+                # runs before progress starts. A fetch failure surfaces as
+                # the job error via the handler below; check_amt in the
+                # engine remains the backstop.
+                from video_upscaler.interp import check_amt, download_amt_model
+
+                if check_amt(model_key):
+                    download_amt_model(model_key)
                 results = process_interpolate(
                     video_paths, model_key, factor, progress_callback
                 )
