@@ -9,6 +9,7 @@
 param(
     [Parameter(Mandatory)][string]$InstallDir,
     [switch]$Uninstalled,
+    [switch]$KeepMedia,
     [switch]$ExpectCleanProfile,
     [switch]$ExpectTensorrt
 )
@@ -28,6 +29,7 @@ $drive    = (Split-Path -Qualifier $InstallDir)
 
 if ($Uninstalled) {
     foreach ($dir in $required) {
+        if ($KeepMedia -and ($dir -eq 'input' -or $dir -eq 'output')) { continue }
         Test-Condition (-not (Test-Path (Join-Path $InstallDir $dir))) "removed $dir\"
     }
     Test-Condition (-not (Test-Path $marker)) 'removed .setup_complete'

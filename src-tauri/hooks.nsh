@@ -79,6 +79,10 @@ Var TensorrtChoice
     Goto clarity_hook_done
 
   clarity_failed:
+    CreateDirectory "$DataDir\logs"
+    FileOpen $1 "$DataDir\logs\provision-failed.log" a
+    FileWrite $1 "Provision failed, code $0$\r$\n"
+    FileClose $1
     DetailPrint "[ERROR] The AI engine could not be installed (code $0)."
     DetailPrint "        Log: $DataDir\logs\provision.log"
     MessageBox MB_OK|MB_ICONSTOP "Clarity was installed, but its AI engine could not be set up (code $0).$\n$\nClarity will finish the setup when you next start it.$\nLog: $DataDir\logs\provision.log"
@@ -109,6 +113,20 @@ Var TensorrtChoice
   Delete "$INSTDIR\.setup_complete"
   Delete "$INSTDIR\.provisioning.lock"
   Delete "$INSTDIR\.clarity-write-test"
+
+  ; Fallback location: when $INSTDIR was not writable the hook provisioned
+  ; into $LOCALAPPDATA\Clarity instead, so the same regenerable set must go
+  ; here too or an uninstall leaves gigabytes behind.
+  RMDir /r "$LOCALAPPDATA\Clarity\python"
+  RMDir /r "$LOCALAPPDATA\Clarity\env"
+  RMDir /r "$LOCALAPPDATA\Clarity\models"
+  RMDir /r "$LOCALAPPDATA\Clarity\tools"
+  RMDir /r "$LOCALAPPDATA\Clarity\.cache"
+  RMDir /r "$LOCALAPPDATA\Clarity\logs"
+  Delete "$LOCALAPPDATA\Clarity\setup.json"
+  Delete "$LOCALAPPDATA\Clarity\.setup_complete"
+  Delete "$LOCALAPPDATA\Clarity\.provisioning.lock"
+  Delete "$LOCALAPPDATA\Clarity\.clarity-write-test"
 
   ; User media is not ours to delete silently.
   ${If} $DeleteAppDataCheckboxState = 1

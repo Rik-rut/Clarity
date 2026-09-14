@@ -35,10 +35,20 @@ pub fn same_volume(a: &Path, b: &Path) -> bool {
 pub fn merge_into(legacy: &Path, target: &Path) -> Result<Vec<String>, String> {
     let entries = std::fs::read_dir(legacy)
         .map_err(|e| format!("cannot read {}: {e}", legacy.display()))?;
+    let mut entries: Vec<std::fs::DirEntry> = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("cannot read {}: {e}", legacy.display()))?;
+    // The marker must land absolute-last (after setup.json): is_setup_complete
+    // requires marker + env interpreter, so the target reads complete only
+    // once every other entry has already moved.
+    entries.sort_by_key(|entry| match entry.file_name().to_string_lossy().as_ref() {
+        ".setup_complete" => 2,
+        "setup.json" => 1,
+        _ => 0,
+    });
     let mut moved = Vec::new();
 
     for entry in entries {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", legacy.display()))?;
         let from = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         let to = target.join(&name);
@@ -127,11 +137,13 @@ mod tests {
         let target = root.join("Clarity");
         std::fs::create_dir_all(legacy.join("models")).unwrap();
         std::fs::write(legacy.join("setup.json"), b"{}").unwrap();
+        std::fs::write(legacy.join(".setup_complete"), b"done").unwrap();
         std::fs::create_dir_all(&target).unwrap();
 
         let moved = merge_into(&legacy, &target).unwrap();
 
-        assert_eq!(moved.len(), 2);
+        assert_eq!(moved.len(), 3);
+        assert_eq!(moved.last().map(String::as_str), Some(".setup_complete"));
         assert!(!legacy.exists(), "an emptied legacy folder is removed");
         let _ = std::fs::remove_dir_all(&root);
     }
