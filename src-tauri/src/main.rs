@@ -2,6 +2,7 @@
 
 pub mod hardware;
 pub mod process;
+pub mod setup;
 
 fn main() {
     tauri::Builder::default()
