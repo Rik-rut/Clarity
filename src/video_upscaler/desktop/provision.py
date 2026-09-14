@@ -212,6 +212,17 @@ def _step_verify(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Under the NSIS installer stdout is a pipe, so Windows falls back to the
+    # ANSI codepage — which cannot encode the box-drawing banner the model
+    # download child prints and this process re-emits as PROGRESS lines. The
+    # child (cli.run) already forces UTF-8 for itself; do the same here before
+    # anything is printed.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
     args = parse_args(argv)
     context = build_context(data_dir=args.data_dir, resources_dir=args.resources_dir)
     context.ensure_directories()
