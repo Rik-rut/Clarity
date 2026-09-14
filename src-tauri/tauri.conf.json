@@ -17,7 +17,8 @@
         "minHeight": 700,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true
+        "decorations": true,
+        "visible": false
       }
     ],
     "security": {
@@ -37,7 +38,11 @@
     "resources": [
       "resources/uv.exe",
       "resources/ffmpeg.exe",
-      "resources/ffprobe.exe"
+      "resources/ffprobe.exe",
+      "resources/pyproject.toml",
+      "resources/README.md",
+      "resources/main.py",
+      "resources/src/**/*"
     ],
     "windows": {
       "nsis": {

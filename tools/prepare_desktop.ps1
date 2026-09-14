@@ -150,7 +150,7 @@ Write-Host "==================================================" -ForegroundColor
 # -------------------------------------------------------------
 # 1. uv.exe setup
 # -------------------------------------------------------------
-Write-Host "`n[1/3] Checking uv.exe..." -ForegroundColor White
+Write-Host "`n[1/4] Checking uv.exe..." -ForegroundColor White
 $uvTarget = Join-Path $ResourcesDir "uv.exe"
 $uvValid = Test-BinaryExecutable -FilePath $uvTarget -Argument "--version" -MinSizeBytes 1048576
 
@@ -210,7 +210,7 @@ if ($uvValid -and -not $Force) {
 # -------------------------------------------------------------
 # 2. ffmpeg.exe and ffprobe.exe setup
 # -------------------------------------------------------------
-Write-Host "`n[2/3] Checking ffmpeg.exe & ffprobe.exe..." -ForegroundColor White
+Write-Host "`n[2/4] Checking ffmpeg.exe & ffprobe.exe..." -ForegroundColor White
 $ffmpegTarget = Join-Path $ResourcesDir "ffmpeg.exe"
 $ffprobeTarget = Join-Path $ResourcesDir "ffprobe.exe"
 
@@ -287,7 +287,7 @@ if ($ffmpegValid -and -not $Force) {
 # -------------------------------------------------------------
 # 3. Application Icons Setup
 # -------------------------------------------------------------
-Write-Host "`n[3/3] Checking application icons in src-tauri/icons/..." -ForegroundColor White
+Write-Host "`n[3/4] Checking application icons in src-tauri/icons/..." -ForegroundColor White
 $icoTarget = Join-Path $IconsDir "icon.ico"
 $png32Target = Join-Path $IconsDir "32x32.png"
 $png128Target = Join-Path $IconsDir "128x128.png"
@@ -334,7 +334,7 @@ print("ICONS_OK")
     Set-Content -Path $tempPy -Value $pyScript -Encoding utf8
     try {
         if ($hasUv) {
-            $pyOutput = & "$uvTarget" run python $tempPy $BrandLogo $IconsDir 2>&1
+            $pyOutput = & "$uvTarget" run --with pillow python $tempPy $BrandLogo $IconsDir 2>&1
             if ($pyOutput -match "ICONS_OK") {
                 $iconsGenerated = $true
             }
@@ -414,6 +414,23 @@ print("ICONS_OK")
     }
     Write-Success "Icons generated successfully in $IconsDir"
 }
+
+# -------------------------------------------------------------
+# 4. Stage Application Package for Desktop Installer
+# -------------------------------------------------------------
+Write-Host "`n[4/4] Staging Python application package into resources..." -ForegroundColor White
+
+Copy-Item -Path (Join-Path $RepoRoot "pyproject.toml") -Destination (Join-Path $ResourcesDir "pyproject.toml") -Force
+Copy-Item -Path (Join-Path $RepoRoot "README.md") -Destination (Join-Path $ResourcesDir "README.md") -Force
+Copy-Item -Path (Join-Path $RepoRoot "main.py") -Destination (Join-Path $ResourcesDir "main.py") -Force
+
+$destSrc = Join-Path $ResourcesDir "src"
+if (Test-Path $destSrc) {
+    Remove-Item -Path $destSrc -Recurse -Force
+}
+Copy-Item -Path (Join-Path $RepoRoot "src") -Destination $ResourcesDir -Recurse -Force
+Get-ChildItem -Path $destSrc -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+Write-Success "Python application package staged in $ResourcesDir"
 
 # -------------------------------------------------------------
 # Final Verification & Output

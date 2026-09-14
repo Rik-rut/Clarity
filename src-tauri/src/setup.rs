@@ -709,6 +709,19 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_project_root_direct_in_resources() {
+        let temp_resources = std::env::temp_dir().join("clarity_test_direct_resources");
+        let _ = std::fs::remove_dir_all(&temp_resources);
+        std::fs::create_dir_all(&temp_resources).unwrap();
+        std::fs::write(temp_resources.join("pyproject.toml"), b"# dummy").unwrap();
+
+        let resolved = resolve_project_root(&temp_resources);
+        assert_eq!(resolved, temp_resources);
+
+        let _ = std::fs::remove_dir_all(&temp_resources);
+    }
+
+    #[test]
     fn test_resolve_uv_bin_returns_valid_or_fallback() {
         let uv_path = resolve_uv_bin(Path::new("non_existent_resources"));
         assert!(!uv_path.as_os_str().is_empty());

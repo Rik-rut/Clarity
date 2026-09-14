@@ -33,7 +33,7 @@ pub fn navigate_window(app: &AppHandle, target: &str) -> Result<(), String> {
         .or_else(|| app.webview_windows().into_values().next())
         .ok_or_else(|| "No webview window found".to_string())?;
 
-    if let Ok(url) = target.parse::<tauri::Url>() {
+    let res = if let Ok(url) = target.parse::<tauri::Url>() {
         window
             .navigate(url)
             .map_err(|e| format!("Navigation failed: {e}"))
@@ -43,7 +43,10 @@ pub fn navigate_window(app: &AppHandle, target: &str) -> Result<(), String> {
         window
             .eval(&js)
             .map_err(|e| format!("Failed to evaluate navigation script: {e}"))
-    }
+    };
+
+    let _ = window.show();
+    res
 }
 
 /// Pure implementation of setup status query.

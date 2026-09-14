@@ -2342,6 +2342,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await window.__TAURI__.notification.requestPermission();
             granted = res === 'granted';
           }
+        } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+          Notification.requestPermission().catch(() => {});
         }
       } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
         Notification.requestPermission().catch(() => {});
@@ -2411,14 +2413,6 @@ document.addEventListener('DOMContentLoaded', () => {
               'Clarity — Render Complete',
               `Video "${videoName}" has finished processing!`
             );
-            if (window.__TAURI__ && window.__TAURI__.notification) {
-              if (data.stage === 'completed') {
-                window.__TAURI__.notification.sendNotification({
-                  title: 'Clarity — Render Complete',
-                  body: `Video "${data.video_name || videoName}" has finished processing!`
-                });
-              }
-            }
 
             if (job.output_files && job.output_files.length > 0 && elems.videoRight) {
               let outPath = job.output_files[0];

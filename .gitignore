@@ -64,4 +64,4 @@ docs/*
 # Tauri desktop application
 node_modules/
 src-tauri/target/
-src-tauri/resources/*.exe
+src-tauri/resources/
