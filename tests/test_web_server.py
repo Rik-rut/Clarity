@@ -16,11 +16,19 @@ def test_server_root_endpoint():
     assert resp.status_code in (200, 404)
 
 
-def test_video_streaming_range_requests(tmp_path):
+def test_video_streaming_range_requests(tmp_path, monkeypatch):
+    from video_upscaler import config
+
+    data_dir = tmp_path / "data"
+    out_dir = data_dir / "output"
+    out_dir.mkdir(parents=True)
+    monkeypatch.setattr(config, "DATA_DIR", data_dir)
+    monkeypatch.setattr(config, "OUTPUT_DIR", out_dir)
+
     app = create_app()
     client = TestClient(app)
 
-    dummy_vid = tmp_path / "dummy.mp4"
+    dummy_vid = out_dir / "dummy.mp4"
     data = b"preview-video-bytes-data-content" * 100
     dummy_vid.write_bytes(data)
     total_size = len(data)
