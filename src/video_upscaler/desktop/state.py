@@ -72,6 +72,8 @@ class SetupState:
     torch_variant: str = ""
     gpu_names: List[str] = field(default_factory=list)
     models_tier: str = ""
+    tensorrt: bool = False
+    backend: str = ""
     completed_at: str = ""
     steps: Dict[str, str] = field(default_factory=lambda: {s: PENDING for s in STEPS})
     errors: Dict[str, str] = field(default_factory=dict)
@@ -117,6 +119,8 @@ class SetupState:
             "torch_variant": self.torch_variant,
             "gpu_names": list(self.gpu_names),
             "models_tier": self.models_tier,
+            "tensorrt": self.tensorrt,
+            "backend": self.backend,
             "completed_at": self.completed_at,
             "steps": dict(self.steps),
             "errors": dict(self.errors),
@@ -132,6 +136,8 @@ class SetupState:
         gpu_names = payload.get("gpu_names") or []
         state.gpu_names = [str(n) for n in gpu_names] if isinstance(gpu_names, list) else []
         state.models_tier = str(payload.get("models_tier", ""))
+        state.tensorrt = bool(payload.get("tensorrt", False))
+        state.backend = str(payload.get("backend", "") or "")
         state.completed_at = str(payload.get("completed_at", ""))
         steps = payload.get("steps") or {}
         if isinstance(steps, dict):
