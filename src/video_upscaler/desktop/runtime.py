@@ -321,13 +321,14 @@ def install_dependencies(
     context: SetupContext,
     tracker: ProgressTracker,
     torch_variant: str,
+    tensorrt: bool = False,
 ) -> None:
     """Install the project and its dependencies into the provisioned venv."""
     # uv will create an environment for itself if the interpreter is missing;
     # that is how a failed venv step used to end up with a roaming interpreter.
     _require_venv_interpreter(context)
 
-    command = [
+    base = [
         str(context.uv_exe),
         "pip",
         "install",
@@ -335,14 +336,40 @@ def install_dependencies(
         str(context.venv_python),
     ]
     if torch_variant == "cu126":
-        command += ["--extra-index-url", PYTORCH_CU126_INDEX]
-    command += ["-e", str(context.app_dir)]
+        base += ["--extra-index-url", PYTORCH_CU126_INDEX]
 
     tracker.phase("dependencies")
-    tracker.line(
-        f"Installing Clarity and PyTorch ({torch_variant}) — this is the long step…"
+    if tensorrt:
+        tracker.line(
+            f"Installing Clarity, PyTorch ({torch_variant}) and TensorRT — the long step…"
+        )
+        try:
+            run_streamed(
+                base + ["-e", f"{context.app_dir}[tensorrt]"],
+                tracker,
+                context=context,
+                stage="dependency install",
+            )
+            return
+        except SetupError as exc:
+            tracker.line(f"TensorRT could not be installed ({exc}). Continuing with CUDA.")
+    else:
+        tracker.line(f"Installing Clarity and PyTorch ({torch_variant}) — this is the long step…")
+
+    run_streamed(
+        base + ["-e", str(context.app_dir)],
+        tracker,
+        context=context,
+        stage="dependency install",
     )
-    run_streamed(command, tracker, context=context, stage="dependency install")
+
+
+def install_runtime(context: SetupContext, tracker: ProgressTracker, state) -> None:
+    """Venv plus dependencies, honouring the TensorRT decision in ``state``."""
+    create_venv(context, tracker)
+    install_dependencies(
+        context, tracker, state.torch_variant or "cpu", tensorrt=bool(state.tensorrt)
+    )
 
 
 def verify_runtime(
@@ -357,7 +384,9 @@ def verify_runtime(
     code = (
         f"import {VERIFY_IMPORTS}\n"
         "import torch\n"
+        "from video_upscaler.backend import detect_backend\n"
         "print('imports ok', torch.__version__, 'cuda', torch.cuda.is_available())\n"
+        "print('backend', detect_backend())\n"
     )
     tracker.line("Verifying the provisioned environment…")
     output = run_streamed(
@@ -372,7 +401,17 @@ def verify_runtime(
         "output": output.strip(),
         "cuda": "cuda True" in output,
         "torch_version": _first_version(output),
+        "backend": _first_field(output, "backend"),
     }
+
+
+def _first_field(output: str, key: str) -> str:
+    """Value printed as ``key value`` by the verification probe, else ''."""
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) > 1 and parts[0] == key:
+            return parts[1]
+    return ""
 
 
 def _first_version(output: str) -> str:
@@ -406,9 +445,3 @@ class EnvironmentInfo:
             "exists": self.exists,
             "detail": self.detail,
         }
-
-
-def install_runtime(context: SetupContext, tracker: ProgressTracker, state) -> None:
-    """Venv plus dependencies, honouring the TensorRT decision in ``state``."""
-    create_venv(context, tracker)
-    install_dependencies(context, tracker, state.torch_variant or "cpu")

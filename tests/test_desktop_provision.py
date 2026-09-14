@@ -289,6 +289,68 @@ def test_managed_interpreter_lookup_skips_uv_staging_dirs(tmp_path: Path) -> Non
     assert find_python_executable(install) == real / "python.exe"
 
 
+def _record_commands(monkeypatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def streamed(command, tracker, **kwargs):
+        calls.append([str(part) for part in command])
+        return "ok"
+
+    monkeypatch.setattr(runtime, "run_streamed", streamed)
+    return calls
+
+
+def test_the_tensorrt_extra_is_requested_when_chosen(base, monkeypatch) -> None:
+    write_fake_env(base.env_dir, base.python_install_dir)
+    calls = _record_commands(monkeypatch)
+
+    runtime.install_dependencies(base, ProgressTracker(), "cu126", tensorrt=True)
+
+    assert any(part.endswith("[tensorrt]") for part in calls[-1])
+    assert "--extra-index-url" in calls[-1]
+
+
+def test_tensorrt_is_not_requested_on_a_machine_without_nvidia(base, monkeypatch) -> None:
+    write_fake_env(base.env_dir, base.python_install_dir)
+    calls = _record_commands(monkeypatch)
+
+    runtime.install_dependencies(base, ProgressTracker(), "cpu", tensorrt=False)
+
+    assert not any(part.endswith("[tensorrt]") for part in calls[-1])
+
+
+def test_a_failed_tensorrt_install_falls_back_to_cuda(base, monkeypatch) -> None:
+    """TensorRT is an optimisation: a missing wheel must not brick the install."""
+    write_fake_env(base.env_dir, base.python_install_dir)
+    attempts: list[list[str]] = []
+
+    def streamed(command, tracker, **kwargs):
+        argv = [str(part) for part in command]
+        attempts.append(argv)
+        if any(part.endswith("[tensorrt]") for part in argv):
+            raise SetupError("dependency install failed (exit 1): no solution for tensorrt")
+        return "ok"
+
+    monkeypatch.setattr(runtime, "run_streamed", streamed)
+    runtime.install_dependencies(base, ProgressTracker(), "cu126", tensorrt=True)
+
+    assert len(attempts) == 2
+    assert not any(part.endswith("[tensorrt]") for part in attempts[-1])
+
+
+def test_verify_runtime_reports_the_active_backend(base, monkeypatch) -> None:
+    write_fake_env(base.env_dir, base.python_install_dir)
+    monkeypatch.setattr(
+        runtime, "run_streamed",
+        lambda *a, **k: "imports ok 2.7.0 cuda True\nbackend tensorrt\n",
+    )
+
+    report = runtime.verify_runtime(base, ProgressTracker())
+
+    assert report["backend"] == "tensorrt"
+    assert report["cuda"] is True
+
+
 def test_canonical_executable_resolves_the_versionless_alias(tmp_path: Path) -> None:
     """uv's alias directory is a symlink; handing it to uv breaks venv linking.
 
