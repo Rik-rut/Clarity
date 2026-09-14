@@ -312,7 +312,7 @@ class JobManager:
 
             job.end_time = time.perf_counter()
             job.elapsed_seconds = job.end_time - (job.start_time or job.end_time)
-            job.output_files = [str(p) for p in results.get("success", [])]
+            job.output_files = [str(Path(p).resolve()) for p in results.get("success", [])]
 
             if results.get("failed"):
                 job.error_message = _format_failed(results["failed"])

@@ -554,8 +554,16 @@ def get_job_status() -> Dict[str, Any]:
 @router.get("/stream/video")
 def stream_video(request: Request, path: str = Query(...)) -> Any:
     vid_path = Path(path)
-    if not vid_path.is_absolute():
-        vid_path = (config.BASE_DIR / path).resolve()
+    # Rooted paths (absolute, or drive-less "/..." on Windows which carries its
+    # own root) keep the historical fast path; anything else is user-media
+    # relative and resolves against the data dir, never the code dir.
+    if not vid_path.is_absolute() and not vid_path.anchor:
+        vid_path = (config.DATA_DIR / path).resolve()
+        roots = {config.DATA_DIR.resolve(), config.OUTPUT_DIR.resolve()}
+        if not any(
+            vid_path == root or root in vid_path.parents for root in roots
+        ):
+            raise HTTPException(status_code=403, detail="Path escapes the data directory")
     return stream_video_file(vid_path, request)
 
 @router.websocket("/ws/progress")
