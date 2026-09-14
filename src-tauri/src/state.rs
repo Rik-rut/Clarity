@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use crate::process::BackendProcessManager;
 
 /// The `C:\` style root of a path, when it has a Windows drive prefix.
-fn drive_root(path: &Path) -> Option<String> {
+pub(crate) fn drive_root(path: &Path) -> Option<String> {
     match path.components().next()? {
         std::path::Component::Prefix(prefix) => {
             let text = prefix.as_os_str().to_string_lossy().to_string();
