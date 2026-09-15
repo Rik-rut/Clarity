@@ -97,7 +97,6 @@ def test_slow_motion_job_skips_fetch_when_checkpoint_present(
     tmp_path, monkeypatch
 ):
     """Present checkpoint (here AMT-S) triggers no hub fetch."""
-    install_calls: list = []
     process_calls: list = []
 
     models_dir = tmp_path / "models"
@@ -127,7 +126,6 @@ def test_slow_motion_job_skips_fetch_when_checkpoint_present(
     manager.jobs["amt1"] = job
     manager._run_job_thread("amt1", [src], params, out_dir)
 
-    assert install_calls == []
     assert process_calls == [("AMT-S", 2)]
     assert job.status == "completed"
 

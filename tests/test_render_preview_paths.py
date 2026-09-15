@@ -73,7 +73,11 @@ def test_job_output_files_are_absolute_after_success(tmp_path, monkeypatch):
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    # Processors historically returned backend-relative paths ("output\\<name>").
+    # Processors historically returned backend-relative paths ("output\\<name>"),
+    # which production resolves via Path.resolve() — i.e. anchored at CWD.
+    # Pin CWD to the job's out_dir so the containment assertion below is
+    # deterministic regardless of the invoker's working directory.
+    monkeypatch.chdir(out_dir)
     backend_relative = Path("output") / "render_done.mp4"
 
     def fake_process(videos, profile, progress_cb):
@@ -97,4 +101,6 @@ def test_job_output_files_are_absolute_after_success(tmp_path, monkeypatch):
 
     assert job.status == "completed"
     assert job.output_files
-    assert Path(job.output_files[0]).is_absolute()
+    resolved = Path(job.output_files[0])
+    assert resolved.is_absolute()
+    assert resolved.is_relative_to(out_dir.resolve())

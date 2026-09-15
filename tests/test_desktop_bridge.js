@@ -372,14 +372,6 @@ describe('Scoped unload on deletes (F3)', () => {
     assert.notStrictEqual(unloadIdx, -1, 'handleDeleteVideo must use the scoped unload helper');
     assert.ok(unloadIdx < fetchIdx, 'scoped unload must run before fetch(DELETE) so the stream handle is released');
   });
-  test('scoped unload runs BEFORE fetch(DELETE)', () => {
-    const fnSrc = extractFn('async function handleDeleteVideo(');
-    const fetchIdx = fnSrc.indexOf('/api/videos/delete');
-    assert.notStrictEqual(fetchIdx, -1, 'handleDeleteVideo must call the delete endpoint');
-    const unloadIdx = fnSrc.indexOf('unloadPlayerIfShowing');
-    assert.notStrictEqual(unloadIdx, -1, 'handleDeleteVideo must use the scoped unload helper');
-    assert.ok(unloadIdx < fetchIdx, 'scoped unload must run before fetch(DELETE) so the stream handle is released');
-  });
 });
 
 describe('Status poll reconciler (F4)', () => {
