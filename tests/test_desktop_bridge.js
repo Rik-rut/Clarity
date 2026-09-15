@@ -237,19 +237,20 @@ describe('Render queue lifecycle (Phase C)', () => {
   });
 
   test('job_cancelled resets UI and clears the active job', () => {
-    assert.ok(src.includes('job_cancelled'), 'ws handler must handle job_cancelled');
-    const idx = src.indexOf('job_cancelled');
-    const region = src.slice(idx, idx + 800);
-    assert.ok(region.includes('state.activeJob'), 'cancelled branch must clear state.activeJob');
-    assert.ok(region.includes('resetRenderUI'), 'cancelled branch must reset the render UI');
+    const fnSrc = extractFn('function handleJobCancelled(');
+    assert.ok(fnSrc.includes('state.activeJob = null'), 'cancelled handler must clear state.activeJob');
+    assert.ok(fnSrc.includes('resetRenderUI'), 'cancelled handler must reset the render UI');
+    assert.ok(src.includes("data.type === 'job_cancelled'"), 'ws handler must still route job_cancelled');
+    const idx = src.indexOf("data.type === 'job_cancelled'");
+    const region = src.slice(idx, idx + 300);
+    assert.ok(region.includes('handleJobCancelled'), 'cancelled branch must use the shared handler');
   });
 
   test('completed clears the queue selection (failed keeps it)', () => {
-    const idx = src.indexOf("data.type === 'job_completed'");
-    assert.notStrictEqual(idx, -1, 'ws handler must handle job_completed');
-    const region = src.slice(idx, idx + 3000);
-    assert.ok(region.includes('state.selectedVideos = []'), 'completed must clear selectedVideos');
-    assert.ok(region.includes('updateQueueUI'), 'completed must re-render the queue UI');
+    const fnSrc = extractFn('function handleJobCompleted(');
+    assert.ok(fnSrc.includes('state.selectedVideos = []'), 'completed must clear selectedVideos');
+    assert.ok(fnSrc.includes('updateQueueUI'), 'completed must re-render the queue UI');
+    assert.ok(src.includes('handleJobCompleted(data.job)'), 'ws branch must delegate to the shared handler');
   });
 
   test('delete unloads the preview BEFORE issuing DELETE', () => {
@@ -370,5 +371,225 @@ describe('Scoped unload on deletes (F3)', () => {
     const unloadIdx = fnSrc.indexOf('unloadPlayerIfShowing');
     assert.notStrictEqual(unloadIdx, -1, 'handleDeleteVideo must use the scoped unload helper');
     assert.ok(unloadIdx < fetchIdx, 'scoped unload must run before fetch(DELETE) so the stream handle is released');
+  });
+  test('scoped unload runs BEFORE fetch(DELETE)', () => {
+    const fnSrc = extractFn('async function handleDeleteVideo(');
+    const fetchIdx = fnSrc.indexOf('/api/videos/delete');
+    assert.notStrictEqual(fetchIdx, -1, 'handleDeleteVideo must call the delete endpoint');
+    const unloadIdx = fnSrc.indexOf('unloadPlayerIfShowing');
+    assert.notStrictEqual(unloadIdx, -1, 'handleDeleteVideo must use the scoped unload helper');
+    assert.ok(unloadIdx < fetchIdx, 'scoped unload must run before fetch(DELETE) so the stream handle is released');
+  });
+});
+
+describe('Status poll reconciler (F4)', () => {
+  const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
+  const src = fs.readFileSync(appJsPath, 'utf8');
+
+  // Same extraction strategy as the suites above: app.js internals live two
+  // spaces deep, each function ending at the first line that is exactly '  }'.
+  function extractFn(header) {
+    const start = src.indexOf(header);
+    assert.notStrictEqual(start, -1, 'app.js must define ' + header);
+    const end = src.indexOf('\n  }', start);
+    assert.notStrictEqual(end, -1, 'unterminated ' + header);
+    return src.slice(start, end + 4);
+  }
+
+  function makeElem() {
+    const added = [];
+    const removed = [];
+    const el = {
+      added,
+      removed,
+      classList: { add: (c) => added.push(c), remove: (c) => removed.push(c) },
+      textContent: '',
+      src: '',
+      loadCalls: 0,
+      load() { el.loadCalls++; }
+    };
+    return el;
+  }
+
+  function completedSnapshot() {
+    return {
+      job_id: 'j1',
+      status: 'completed',
+      percent: 100,
+      stage: 'Processing complete!',
+      current_file_index: 1,
+      total_files: 1,
+      current_file_name: 'a.mp4',
+      elapsed_formatted: '0:03',
+      eta_formatted: '--',
+      output_files: [],
+      error_message: null
+    };
+  }
+
+  // Build the real poller + shared terminal handlers with stubbed siblings.
+  function loadPollerHarness(overrides) {
+    overrides = overrides || {};
+    const intervalMatch = src.match(/STATUS_POLL_INTERVAL_MS\s*=\s*(\d+)/);
+    assert.ok(intervalMatch, 'app.js must define STATUS_POLL_INTERVAL_MS');
+    const graceMatch = src.match(/STATUS_POLL_GRACE_MS\s*=\s*(\d+)/);
+    assert.ok(graceMatch, 'app.js must define STATUS_POLL_GRACE_MS');
+    assert.strictEqual(Number(intervalMatch[1]), 2500, 'poll interval must stay conservative (2.5s)');
+    assert.strictEqual(Number(graceMatch[1]), 5000, 'grace window must be 5s (no WS heartbeat constant exists)');
+
+    const fetchCalls = [];
+    const fetchImpl = overrides.fetch || (() => {
+      fetchCalls.push('/api/jobs/status');
+      return Promise.resolve({ json: () => Promise.resolve({ active: true, job: { job_id: 'srv' } }) });
+    });
+    const fetchMock = (...args) => fetchImpl(...args);
+    const intervals = [];
+    const cleared = [];
+    let timerSeq = 0;
+    const setIntervalMock = (cb, ms) => {
+      timerSeq++;
+      intervals.push({ id: timerSeq, cb, ms });
+      return timerSeq;
+    };
+    const clearIntervalMock = (id) => { cleared.push(id); };
+    let nowMs = 1000000;
+    const dateMock = { now: () => nowMs };
+
+    const prelude = [
+      'const STATUS_POLL_INTERVAL_MS = ' + intervalMatch[1] + ';',
+      'const STATUS_POLL_GRACE_MS = ' + graceMatch[1] + ';',
+      'let statusPollTimer = null;',
+      'let lastWsEventAt = 0;',
+      'const calls = { toasts: [], notifications: [], queueUpdates: 0, maUpdates: 0, outputLoads: 0, maResults: 0 };',
+      'function showToast(msg, kind) { calls.toasts.push({ msg: msg, kind: kind }); }',
+      'function updateMaRenderButton() { calls.maUpdates++; }',
+      'function updateQueueUI() { calls.queueUpdates++; }',
+      'function sendDesktopNotification(title, body) { calls.notifications.push({ title: title, body: body }); }',
+      'function loadOutputVideos(silent) { calls.outputLoads++; }',
+      'function populateMaResultWindows(files) { calls.maResults++; }'
+    ].join('\n');
+    const fns = [
+      extractFn('function resetRenderUI()'),
+      extractFn('function handleJobCompleted('),
+      extractFn('function handleJobCancelled('),
+      extractFn('function startStatusPoller('),
+      extractFn('function stopStatusPoller('),
+      extractFn('async function pollJobStatus(')
+    ].join('\n\n');
+    const factory = new Function(
+      'state',
+      'elems',
+      'fetch',
+      'setInterval',
+      'clearInterval',
+      'Date',
+      prelude + '\n' + fns +
+      '\nreturn { startStatusPoller, stopStatusPoller, pollJobStatus,' +
+      ' handleJobCompleted, handleJobCancelled, calls,' +
+      ' getTimer: () => statusPollTimer,' +
+      ' setLastWsEvent: (v) => { lastWsEventAt = v; } };'
+    );
+    const state = {
+      activeJob: null,
+      selectedVideos: [{ name: 'a.mp4' }],
+      activeTab: 'upscale',
+      isOutputDropdownOpen: false
+    };
+    const elems = {
+      btnRender: makeElem(),
+      btnCancel: makeElem(),
+      renderProgressCard: makeElem(),
+      renderCompletedBanner: makeElem(),
+      renderTotalTime: makeElem(),
+      videoRight: makeElem(),
+      placeholderRight: makeElem()
+    };
+    const api = factory(state, elems, fetchMock, setIntervalMock, clearIntervalMock, dateMock);
+    api.now = () => nowMs;
+    api.advance = (ms) => { nowMs += ms; };
+    return { api, state, elems, fetchCalls, intervals, cleared, advance: api.advance };
+  }
+
+  test('poller starts on render start and stops on WS completion (no stray intervals)', () => {
+    const h = loadPollerHarness();
+    assert.strictEqual(h.api.getTimer(), null, 'no timer before a render starts');
+    h.api.startStatusPoller();
+    const first = h.api.getTimer();
+    assert.notStrictEqual(first, null, 'render start must arm the poller');
+    assert.strictEqual(h.intervals.length, 1);
+    assert.strictEqual(h.intervals[0].ms, 2500);
+    h.api.startStatusPoller();
+    assert.deepStrictEqual(h.cleared, [first], 'restart must clear the old interval (single poller)');
+    assert.strictEqual(h.intervals.length, 2);
+
+    h.state.activeJob = completedSnapshot();
+    h.api.handleJobCompleted(h.state.activeJob);
+    assert.strictEqual(h.state.activeJob, null, 'WS completion must clear the active job');
+    assert.strictEqual(h.api.getTimer(), null, 'WS completion must stop the poller');
+    assert.ok(h.cleared.length >= 2, 'completion must clear the interval');
+    assert.ok(h.elems.btnCancel.added.includes('hidden'), 'Cancel must hide after completion');
+  });
+
+  test('missed broadcast reconciles through the shared terminal handler exactly once', async () => {
+    let statusPayload = { active: false, job: null };
+    const h = loadPollerHarness({
+      fetch: () => {
+        hRef.fetchCalls.push('/api/jobs/status');
+        return Promise.resolve({ json: () => Promise.resolve(statusPayload) });
+      }
+    });
+    const hRef = h;
+    h.state.activeJob = completedSnapshot();
+    h.api.startStatusPoller();
+    h.api.setLastWsEvent(h.api.now() - 10000);
+
+    await h.api.pollJobStatus();
+
+    assert.strictEqual(h.state.activeJob, null, 'reconciler must clear the stuck active job');
+    assert.strictEqual(h.api.getTimer(), null, 'poller must stop after reconcile');
+    assert.strictEqual(h.api.calls.toasts.length, 1, 'shared terminal path must run once');
+    assert.strictEqual(h.api.calls.toasts[0].kind, 'success');
+    assert.deepStrictEqual(h.state.selectedVideos, [], 'reconcile must clear the queue like WS completion');
+    assert.ok(h.elems.renderCompletedBanner.removed.includes('hidden'), 'completion banner must show');
+
+    const toastCount = h.api.calls.toasts.length;
+    h.api.handleJobCompleted(completedSnapshot());
+    assert.strictEqual(h.api.calls.toasts.length, toastCount, 'late WS completion must not double-complete');
+  });
+
+  test('fresh WS traffic suppresses the reconcile (grace window)', async () => {
+    const h = loadPollerHarness({
+      fetch: () => {
+        hRef.fetchCalls.push('/api/jobs/status');
+        return Promise.resolve({ json: () => Promise.resolve({ active: false, job: null }) });
+      }
+    });
+    const hRef = h;
+    h.state.activeJob = completedSnapshot();
+    h.api.startStatusPoller();
+    await h.api.pollJobStatus();
+    assert.notStrictEqual(h.state.activeJob, null, 'recent WS event must suppress the reconcile');
+    assert.strictEqual(h.api.calls.toasts.length, 0, 'no terminal UI while inside the grace window');
+  });
+
+  test('no status fetch when idle (no activeJob)', async () => {
+    const h = loadPollerHarness();
+    h.state.activeJob = null;
+    h.api.startStatusPoller();
+    h.api.setLastWsEvent(h.api.now() - 60000);
+    await h.api.pollJobStatus();
+    assert.strictEqual(h.fetchCalls.length, 0, 'idle poller must not hit the network');
+    assert.strictEqual(h.api.getTimer(), null, 'idle poller must stand down');
+  });
+
+  test('status reconciler is wired to the render lifecycle', () => {
+    assert.ok(src.includes('/api/jobs/status'), 'must poll GET /api/jobs/status');
+    const startSrc = extractFn('function startStatusPoller(');
+    assert.ok(startSrc.includes('stopStatusPoller'), 'restart must clear the old interval');
+    assert.ok(startSrc.includes('STATUS_POLL_INTERVAL_MS'), 'start must use the shared interval constant');
+    const pollSrc = extractFn('async function pollJobStatus(');
+    assert.ok(pollSrc.includes('/api/jobs/status'), 'poller must fetch the status endpoint');
+    assert.ok(pollSrc.includes('STATUS_POLL_GRACE_MS'), 'poller must honor the grace window');
+    assert.ok(pollSrc.includes('handleJobCompleted'), 'poller must reuse the shared terminal path');
   });
 });

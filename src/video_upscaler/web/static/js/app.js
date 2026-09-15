@@ -2196,6 +2196,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const data = await resp.json();
         if (data.success) {
           state.activeJob = data.job;
+          startStatusPoller();
           showToast(`Started ${action} job (${videoNames.length} file${videoNames.length === 1 ? '' : 's'})`, 'info');
         } else {
           showToast(`Error: ${data.detail || 'Could not start render job'}`, 'error');
@@ -2216,6 +2217,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const data = await resp.json();
         if (data.success) {
           showToast('Job cancellation requested', 'info');
+          stopStatusPoller();
         }
       } catch (e) {
         showToast('Error cancelling job', 'error');
@@ -2377,6 +2379,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await resp.json();
       if (data.success) {
         state.activeJob = data.job;
+        startStatusPoller();
         showToast('Easy Mask job started', 'info');
       } else {
         showToast('Error: ' + (data.detail || 'Could not start render job'), 'error');
@@ -2506,6 +2509,102 @@ document.addEventListener('DOMContentLoaded', () => {
     sendWebNotification(title, body);
   }
 
+  // 14c. Missed-completion reconciler (F4).
+  // Render completion is WS-only; a dropped socket during the terminal
+  // broadcast leaves the UI stuck (spinning progress, Cancel visible).
+  // While a job is active, poll GET /api/jobs/status conservatively and,
+  // when the backend reports idle long after the last WS event, run the
+  // SAME terminal path as the WS job_completed branch (no second pipeline).
+  // No WS heartbeat/timeout constant exists, so the grace window is 5s.
+  const STATUS_POLL_INTERVAL_MS = 2500;
+  const STATUS_POLL_GRACE_MS = 5000;
+  let statusPollTimer = null;
+  let lastWsEventAt = 0;
+
+  function handleJobCompleted(job) {
+    if (!state.activeJob) return;
+    state.activeJob = null;
+    stopStatusPoller();
+    resetRenderUI();
+    updateMaRenderButton();
+    if (job.status === 'completed') {
+      // Queue is done: clear the selection so Cancel/queue don't linger.
+      // On failure the selection is kept so the user can retry.
+      state.selectedVideos = [];
+      updateQueueUI();
+      if (elems.renderCompletedBanner) elems.renderCompletedBanner.classList.remove('hidden');
+      if (elems.renderTotalTime) elems.renderTotalTime.textContent = `Render completed in ${job.elapsed_formatted}`;
+      showToast(`Render finished in ${job.elapsed_formatted}!`, 'success');
+
+      // Desktop notification IPC bridge
+      const videoName = job.current_file_name ||
+        (job.output_files && job.output_files.length > 0 ? job.output_files[0].replace(/^.*[\\/]/, '') : 'render');
+      sendDesktopNotification(
+        'Clarity — Render Complete',
+        `Video "${videoName}" has finished processing!`
+      );
+
+      if (job.output_files && job.output_files.length > 0 && elems.videoRight) {
+        let outPath = job.output_files[0];
+        if (state.activeTab === 'matanyone') {
+          const gs = job.output_files.find(f => f.endsWith('_greenscreen.mp4'));
+          const matte = job.output_files.find(f => f.endsWith('_matte.mp4'));
+          outPath = gs || matte || outPath;
+          populateMaResultWindows(job.output_files);
+        }
+        elems.videoRight.src = `/api/stream/video?path=${encodeURIComponent(outPath)}`;
+        elems.videoRight.load();
+        if (elems.placeholderRight) elems.placeholderRight.classList.add('hidden');
+      }
+      if (state.isOutputDropdownOpen) {
+        loadOutputVideos(false);
+      }
+    } else {
+      showToast(`Render failed: ${job.error_message || 'Unknown error'}`, 'error');
+    }
+  }
+
+  function handleJobCancelled() {
+    if (!state.activeJob) return;
+    state.activeJob = null;
+    stopStatusPoller();
+    resetRenderUI();
+    updateMaRenderButton();
+    showToast('Render cancelled', 'info');
+  }
+
+  function startStatusPoller() {
+    stopStatusPoller();
+    lastWsEventAt = Date.now();
+    statusPollTimer = setInterval(() => {
+      pollJobStatus();
+    }, STATUS_POLL_INTERVAL_MS);
+  }
+
+  function stopStatusPoller() {
+    if (statusPollTimer) {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
+    }
+  }
+
+  async function pollJobStatus() {
+    if (!state.activeJob) {
+      stopStatusPoller();
+      return;
+    }
+    if (Date.now() - lastWsEventAt < STATUS_POLL_GRACE_MS) return;
+    let data = null;
+    try {
+      const resp = await fetch('/api/jobs/status');
+      data = await resp.json();
+    } catch (e) {
+      return;
+    }
+    if (!data || data.active) return;
+    handleJobCompleted(state.activeJob);
+  }
+
   // 15. WebSocket Progress Broadcasting
   let wsRetryDelay = 2000;
 
@@ -2516,6 +2615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
+        lastWsEventAt = Date.now();
         if (data.type === 'job_progress' || data.type === 'job_started') {
           const job = data.job;
           state.activeJob = job;
@@ -2528,51 +2628,11 @@ document.addEventListener('DOMContentLoaded', () => {
           if (elems.progressFileInfo) elems.progressFileInfo.textContent = `[${job.current_file_index}/${job.total_files}] ${job.current_file_name || ''}`;
           if (elems.progressElapsed) elems.progressElapsed.textContent = job.elapsed_formatted;
           if (elems.progressEta) elems.progressEta.textContent = job.eta_formatted;
+          if (!statusPollTimer) startStatusPoller();
         } else if (data.type === 'job_cancelled') {
-          state.activeJob = null;
-          resetRenderUI();
-          updateMaRenderButton();
-          showToast('Render cancelled', 'info');
+          handleJobCancelled();
         } else if (data.type === 'job_completed') {
-          const job = data.job;
-          state.activeJob = null;
-          resetRenderUI();
-          updateMaRenderButton();
-          if (job.status === 'completed') {
-            // Queue is done: clear the selection so Cancel/queue don't linger.
-            // On failure the selection is kept so the user can retry.
-            state.selectedVideos = [];
-            updateQueueUI();
-            if (elems.renderCompletedBanner) elems.renderCompletedBanner.classList.remove('hidden');
-            if (elems.renderTotalTime) elems.renderTotalTime.textContent = `Render completed in ${job.elapsed_formatted}`;
-            showToast(`Render finished in ${job.elapsed_formatted}!`, 'success');
-
-            // Desktop notification IPC bridge
-            const videoName = job.current_file_name ||
-              (job.output_files && job.output_files.length > 0 ? job.output_files[0].replace(/^.*[\\/]/, '') : 'render');
-            sendDesktopNotification(
-              'Clarity — Render Complete',
-              `Video "${videoName}" has finished processing!`
-            );
-
-            if (job.output_files && job.output_files.length > 0 && elems.videoRight) {
-              let outPath = job.output_files[0];
-              if (state.activeTab === 'matanyone') {
-                const gs = job.output_files.find(f => f.endsWith('_greenscreen.mp4'));
-                const matte = job.output_files.find(f => f.endsWith('_matte.mp4'));
-                outPath = gs || matte || outPath;
-                populateMaResultWindows(job.output_files);
-              }
-              elems.videoRight.src = `/api/stream/video?path=${encodeURIComponent(outPath)}`;
-              elems.videoRight.load();
-              if (elems.placeholderRight) elems.placeholderRight.classList.add('hidden');
-            }
-            if (state.isOutputDropdownOpen) {
-              loadOutputVideos(false);
-            }
-          } else {
-            showToast(`Render failed: ${job.error_message || 'Unknown error'}`, 'error');
-          }
+          handleJobCompleted(data.job);
         }
       } catch (e) {
         console.warn('WS parse error:', e);
