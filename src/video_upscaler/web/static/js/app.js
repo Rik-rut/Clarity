@@ -631,13 +631,55 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Match-scoped unload for deletes: release ONLY the preview players that
+  // are currently streaming the file about to be deleted, so Windows drops
+  // the open 206 stream handle before DELETE without disturbing unrelated
+  // previews or the MA mask canvas.
+  function playerShowsVideo(player, vid) {
+    if (!player || !vid) return false;
+    let raw = '';
+    try {
+      raw = player.currentSrc || player.src || '';
+    } catch (e) { raw = ''; }
+    if (!raw && typeof player.getAttribute === 'function') {
+      raw = player.getAttribute('src') || '';
+    }
+    if (!raw) return false;
+    let decoded = raw;
+    try { decoded = decodeURIComponent(raw); } catch (e) { decoded = raw; }
+    // No shared src-match helper exists elsewhere in this file, so compare
+    // trailing path segments: preview srcs are stream URLs
+    // (/api/stream/video?path=<encoded vid.path>) while vid carries a
+    // filesystem path + name.
+    const tail = (s) => String(s).split(/[\\/]/).pop().split('?')[0].split('#')[0];
+    if (vid.path && decoded.includes(vid.path)) return true;
+    const targetTail = tail(vid.name || vid.path || '');
+    if (!targetTail) return false;
+    return tail(decoded) === targetTail;
+  }
+
+  function unloadPlayerIfShowing(player, placeholder, vid) {
+    if (!playerShowsVideo(player, vid)) return false;
+    try { player.pause(); } catch (e) {}
+    if (typeof player.removeAttribute === 'function') player.removeAttribute('src');
+    else player.src = '';
+    try { player.load(); } catch (e) {}
+    if (placeholder && placeholder.classList) placeholder.classList.remove('hidden');
+    return true;
+  }
+
   // 6. Delete Video (Supports Input & Output Folders)
   async function handleDeleteVideo(vid, folder) {
     const loc = folder ? 'output folder' : 'input folder';
     if (!confirm(`Delete "${vid.name}" from ${loc}?`)) return;
-    // Unload output previews FIRST: an open 206 stream handle locks the file
-    // on Windows and DELETE would fail with WinError 32. Input preview kept.
-    clearPreview(false);
+    // Unload ONLY the players showing this file FIRST: an open 206 stream
+    // handle locks the file on Windows and DELETE would fail with WinError 32.
+    // Unrelated previews and the MA mask canvas are left untouched.
+    unloadPlayerIfShowing(elems.videoLeft, elems.placeholderLeft, vid);
+    unloadPlayerIfShowing(elems.videoMaInput, elems.placeholderMaInput, vid);
+    unloadPlayerIfShowing(elems.videoRight, elems.placeholderRight, vid);
+    unloadPlayerIfShowing(elems.videoMaGreenscreen, elems.placeholderMaGreenscreen, vid);
+    unloadPlayerIfShowing(elems.videoMaMatte, elems.placeholderMaMatte, vid);
     try {
       const resp = await fetch('/api/videos/delete', {
         method: 'POST',

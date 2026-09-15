@@ -257,6 +257,118 @@ describe('Render queue lifecycle (Phase C)', () => {
     const fetchIdx = fnSrc.indexOf('/api/videos/delete');
     assert.notStrictEqual(fetchIdx, -1, 'handleDeleteVideo must call the delete endpoint');
     const before = fnSrc.slice(0, fetchIdx);
-    assert.ok(before.includes('clearPreview'), 'preview must be unloaded before DELETE');
+    assert.ok(before.includes('unloadPlayerIfShowing'), 'matching previews must be unloaded before DELETE');
+    assert.ok(!before.includes('clearPreview'), 'delete must not blanket-clear unrelated previews/mask');
+  });
+});
+
+describe('Scoped unload on deletes (F3)', () => {
+  const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
+  const src = fs.readFileSync(appJsPath, 'utf8');
+
+  // Same extraction strategy as the suites above: app.js internals live two
+  // spaces deep, each function ending at the first line that is exactly '  }'.
+  function extractFn(header) {
+    const start = src.indexOf(header);
+    assert.notStrictEqual(start, -1, 'app.js must define ' + header);
+    const end = src.indexOf('\n  }', start);
+    assert.notStrictEqual(end, -1, 'unterminated ' + header);
+    return src.slice(start, end + 4);
+  }
+
+  function loadScopedHelpers() {
+    const fnSrc =
+      extractFn('function playerShowsVideo(') + '\n\n' + extractFn('function unloadPlayerIfShowing(');
+    return new Function(fnSrc + '\nreturn { playerShowsVideo, unloadPlayerIfShowing };')();
+  }
+
+  function makePlayer(rawSrc) {
+    const calls = [];
+    return {
+      calls,
+      src: rawSrc,
+      currentSrc: '',
+      getAttribute(name) {
+        return name === 'src' ? this.src : null;
+      },
+      removeAttribute(name) {
+        calls.push('remove:' + name);
+        if (name === 'src') this.src = '';
+      },
+      pause() {
+        calls.push('pause');
+      },
+      load() {
+        calls.push('load');
+      }
+    };
+  }
+
+  function makePlaceholder() {
+    const removed = [];
+    return { removed, classList: { remove: (c) => removed.push(c) } };
+  }
+
+  test('delete path no longer blanket-clears previews or mask state', () => {
+    const fnSrc = extractFn('async function handleDeleteVideo(');
+    assert.ok(!fnSrc.includes('clearPreview'), 'delete must not blanket clearPreview (wipes mask + unrelated previews)');
+    assert.ok(!fnSrc.includes('__maMask'), 'delete must leave mask state alone');
+    assert.ok(!fnSrc.includes('maMaskStage'), 'delete must leave the mask stage alone');
+  });
+
+  test('deleting file A while the player shows file B leaves B playing', () => {
+    const { unloadPlayerIfShowing } = loadScopedHelpers();
+    const playerB = makePlayer('/api/stream/video?path=' + encodeURIComponent('/vids/B.mp4'));
+    const placeholder = makePlaceholder();
+
+    const unloaded = unloadPlayerIfShowing(playerB, placeholder, { name: 'A.mp4', path: '/vids/A.mp4' });
+
+    assert.strictEqual(unloaded, false, 'unrelated player must not be unloaded');
+    assert.deepStrictEqual(playerB.calls, [], 'unrelated player must keep playing (no pause/load)');
+    assert.strictEqual(
+      playerB.src,
+      '/api/stream/video?path=' + encodeURIComponent('/vids/B.mp4'),
+      'unrelated player src must be untouched'
+    );
+    assert.deepStrictEqual(placeholder.removed, [], 'no placeholder churn for unrelated deletes');
+  });
+
+  test('deleting the file the player shows unloads that player', () => {
+    const { unloadPlayerIfShowing } = loadScopedHelpers();
+    const playerA = makePlayer('/api/stream/video?path=' + encodeURIComponent('/vids/A.mp4'));
+    const placeholder = makePlaceholder();
+
+    const unloaded = unloadPlayerIfShowing(playerA, placeholder, { name: 'A.mp4', path: '/vids/A.mp4' });
+
+    assert.strictEqual(unloaded, true, 'matching player must be unloaded');
+    assert.deepStrictEqual(playerA.calls, ['pause', 'remove:src', 'load'], 'matching player must pause + drop src + load');
+    assert.strictEqual(playerA.src, '', 'matching player src must be released');
+  });
+
+  test('input-delete path unloads the input player showing the target', () => {
+    const fnSrc = extractFn('async function handleDeleteVideo(');
+    assert.ok(fnSrc.includes('videoLeft'), 'input-delete path must consider the input player (videoLeft)');
+    assert.ok(fnSrc.includes('videoMaInput'), 'input-delete path must consider the MA input player (videoMaInput)');
+
+    const { unloadPlayerIfShowing } = loadScopedHelpers();
+    const videoLeft = makePlayer('/api/stream/video?path=' + encodeURIComponent('C:\\Clarity\\input\\clip.mp4'));
+    const placeholderLeft = makePlaceholder();
+
+    const unloaded = unloadPlayerIfShowing(videoLeft, placeholderLeft, {
+      name: 'clip.mp4',
+      path: 'C:\\Clarity\\input\\clip.mp4'
+    });
+
+    assert.strictEqual(unloaded, true, 'input player showing the deleted file must be unloaded');
+    assert.deepStrictEqual(videoLeft.calls, ['pause', 'remove:src', 'load']);
+  });
+
+  test('scoped unload runs BEFORE fetch(DELETE)', () => {
+    const fnSrc = extractFn('async function handleDeleteVideo(');
+    const fetchIdx = fnSrc.indexOf('/api/videos/delete');
+    assert.notStrictEqual(fetchIdx, -1, 'handleDeleteVideo must call the delete endpoint');
+    const unloadIdx = fnSrc.indexOf('unloadPlayerIfShowing');
+    assert.notStrictEqual(unloadIdx, -1, 'handleDeleteVideo must use the scoped unload helper');
+    assert.ok(unloadIdx < fetchIdx, 'scoped unload must run before fetch(DELETE) so the stream handle is released');
   });
 });
