@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
-import torch
+
+if TYPE_CHECKING:
+    import torch
 
 
 class AMTBackend(Protocol):

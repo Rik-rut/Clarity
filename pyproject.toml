@@ -17,6 +17,10 @@ dependencies = [
     "uvicorn[standard]>=0.28.0",
     "python-multipart>=0.0.9",
     "aiofiles>=23.2.1",
+    # Model downloads go through hf_hub_download so Xet (hf-xet) parallelises
+    # the big weights. Already present transitively via timm; declared so the
+    # accelerated path is a supported contract rather than an accident.
+    "huggingface-hub>=1.28.0",
     # Runtime deps of shipped tabs live in CORE, not extras: `uv run` /
     # `uv sync` without --all-extras performs an exact sync that prunes
     # extra-only packages, which silently broke Interpolate (timm/scipy/…)

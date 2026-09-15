@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 import numpy as np
-import torch
 
 from video_upscaler.amt_backend import AMTBackend
+
+if TYPE_CHECKING:
+    import torch
 
 
 class AMTFrameScheduler:
@@ -20,6 +22,10 @@ class AMTFrameScheduler:
         backend: AMTBackend,
         batch_size: int,
     ) -> Iterator[np.ndarray]:
+        # Imported here so the web server can start (and answer /api/health)
+        # without paying torch's ~10s cold import at module load.
+        import torch
+
         if niters < 0:
             raise ValueError("niters must be non-negative")
         if batch_size < 1:

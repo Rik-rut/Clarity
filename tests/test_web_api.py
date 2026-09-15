@@ -64,7 +64,7 @@ def test_job_start_and_cancel(tmp_path):
     vid = tmp_path / "sample.mp4"
     vid.write_bytes(b"video")
 
-    def slow_process(videos, profile, progress_cb):
+    def slow_process(videos, profile, progress_cb, stage_cb=None):
         for i in range(10):
             time.sleep(0.05)
             progress_cb(1, 1, i * 10)

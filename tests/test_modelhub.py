@@ -178,3 +178,110 @@ def test_dedup_entry_mapping(manifest: dict) -> None:
     assert gmfss == ["train_log_pg104/metric.pkl"]
     rife = [str(e["dest"]) for e in _dedup_entries_for("rife")]
     assert rife == []
+
+
+def test_hf_repo_and_filename_mapping(manifest: dict) -> None:
+    default = {"path": "amt/amt-s.pth"}
+    assert modelhub._hf_repo_and_filename(default) == (
+        "Rik-rut/clarity-models",
+        "CLARITY_MODELS/amt/amt-s.pth",
+    )
+
+    # A manifest that already carries the folder prefix must not double it.
+    prefixed = {"path": "CLARITY_MODELS/cugan/up2x.pth"}
+    assert modelhub._hf_repo_and_filename(prefixed)[1] == (
+        "CLARITY_MODELS/cugan/up2x.pth"
+    )
+
+    # Per-entry repo overrides use the bare repo-relative path.
+    repoe = {"path": "matanyone/matanyone2.pth", "repo": "Rikrut/clarity-matting"}
+    assert modelhub._hf_repo_and_filename(repoe) == (
+        "Rikrut/clarity-matting",
+        "matanyone/matanyone2.pth",
+    )
+
+
+def test_should_use_hf_gates_small_files_and_mirrors(
+    manifest: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLARITY_MODEL_HUB_BASE", raising=False)
+    monkeypatch.setattr(modelhub, "_hf_downloader", lambda: object())
+
+    small = {"path": "amt/amt-s.pth", "size": modelhub.HF_MIN_BYTES - 1}
+    assert modelhub._should_use_hf(small) is False
+
+    big = {"path": "sam/sam.pth", "size": modelhub.HF_MIN_BYTES}
+    assert modelhub._should_use_hf(big) is True
+
+    # A custom mirror keeps the plain HTTP path unless the entry names a repo.
+    monkeypatch.setenv("CLARITY_MODEL_HUB_BASE", "https://mirror.example/models")
+    assert modelhub._should_use_hf(big) is False
+    assert modelhub._should_use_hf({**big, "repo": "owner/repo"}) is True
+
+    # Unimportable huggingface_hub disables the accelerated path everywhere.
+    monkeypatch.delenv("CLARITY_MODEL_HUB_BASE", raising=False)
+
+    def _boom():
+        raise ImportError("no hub")
+
+    monkeypatch.setattr(modelhub, "_hf_downloader", _boom)
+    assert modelhub._should_use_hf(big) is False
+
+
+def test_progress_tqdm_forwards_updates() -> None:
+    seen: list[tuple[int, int | None]] = []
+    cls = modelhub._progress_tqdm(lambda done, total: seen.append((done, total)))
+    bar = cls(total=3)
+    bar.update(1)
+    bar.update(2)
+    assert seen == [(1, 3), (3, 3)]
+
+
+def test_install_entry_prefers_hf_for_large_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest: dict
+) -> None:
+    monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(modelhub, "_should_use_hf", lambda entry: True)
+
+    def fake_hf(entry, staging_dir, progress_cb=None):
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        staged = staging_dir / entry["dest"]
+        staged.write_bytes(b"xyz")
+        if progress_cb is not None:
+            progress_cb(int(entry["size"]), int(entry["size"]))
+        return staged
+
+    def fail_http(*args, **kwargs):
+        raise AssertionError("plain HTTP must not run when Xet succeeds")
+
+    monkeypatch.setattr(modelhub, "_download_hf", fake_hf)
+    monkeypatch.setattr(modelhub, "_download_http", fail_http)
+
+    entry = next(e for e in modelhub.entries(group="amt") if e["dest"] == "amt-s.pth")
+    installed = modelhub.install_entry(entry)
+    assert installed.read_bytes() == b"xyz"
+    # Staging is cleaned up.
+    assert not installed.with_name(installed.name + ".staging").exists()
+
+
+def test_install_entry_falls_back_to_http_when_hf_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest: dict
+) -> None:
+    monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(modelhub, "_should_use_hf", lambda entry: True)
+
+    def boom(entry, staging_dir, progress_cb=None):
+        raise RuntimeError("xet unavailable")
+
+    def fake_http(url, dest, label, expected_size, progress_cb=None):
+        dest.write_bytes(b"xyz")
+        if progress_cb is not None:
+            progress_cb(int(expected_size), int(expected_size))
+
+    monkeypatch.setattr(modelhub, "_download_hf", boom)
+    monkeypatch.setattr(modelhub, "_download_http", fake_http)
+
+    entry = next(e for e in modelhub.entries(group="amt") if e["dest"] == "amt-s.pth")
+    installed = modelhub.install_entry(entry)
+    assert installed.read_bytes() == b"xyz"
+

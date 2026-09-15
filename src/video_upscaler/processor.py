@@ -92,16 +92,29 @@ def effective_backend(backend: str, profile: str) -> str:
     return backend
 
 
-def _make_amt_backend_factory(model_key: str, selection=None):
+def _make_amt_backend_factory(model_key: str, selection=None, stage_cb=None):
     from video_upscaler.interp import AMTBackendFactory, select_amt_backend
 
     selection = selection or select_amt_backend(model_key)
-    return AMTBackendFactory(model_key, selection)
+    return AMTBackendFactory(model_key, selection, stage_cb=stage_cb)
 
 
-def build_engine(profile: str, backend: str):
-    """Construct the right engine for profile + backend."""
+def build_engine(
+    profile: str,
+    backend: str,
+    stage_cb: Callable[[str], None] | None = None,
+):
+    """Construct the right engine for profile + backend.
+
+    ``stage_cb`` receives human-readable progress text so long first-run steps
+    (TensorRT export/build, model loads) are visible in the UI instead of a
+    frozen "Starting…".
+    """
     from video_upscaler.models import model_for_profile, ncnn_args_for_profile
+
+    def _stage(text: str) -> None:
+        if stage_cb is not None:
+            stage_cb(text)
 
     backend = effective_backend(backend, profile)
     model_name = model_for_profile(profile)
@@ -109,15 +122,18 @@ def build_engine(profile: str, backend: str):
     if backend == "tensorrt":
         from video_upscaler.tensorrt_backend import RealCUGANTensorRTEngine
 
+        _stage("Preparing TensorRT engine (first run can take a few minutes)…")
         return RealCUGANTensorRTEngine(model_name)
 
     if backend == "ncnn":
         from video_upscaler.ncnn import NCNNEngine
 
+        _stage("Preparing the ncnn Vulkan engine…")
         return NCNNEngine(profile)
 
     from video_upscaler.cugan import RealCUGANEngine
 
+    _stage("Loading the Real-CUGAN model…")
     return RealCUGANEngine(model_name)
 
 
@@ -182,6 +198,7 @@ def process_videos(
     videos: list[Path],
     profile: str,
     progress_cb: Callable[[int, int, int], None],
+    stage_cb: Callable[[str], None] | None = None,
 ) -> dict:
     """Process videos sequentially; a failing file never stops the batch.
 
@@ -191,8 +208,10 @@ def process_videos(
     """
     results: dict = {"success": [], "failed": [], "times": []}
 
+    if stage_cb is not None:
+        stage_cb("Detecting the compute backend…")
     backend = detect_backend()
-    engine = build_engine(profile, backend)
+    engine = build_engine(profile, backend, stage_cb=stage_cb)
     scale = scale_for_model(model_for_profile(profile))
 
     file_count = len(videos)
@@ -313,6 +332,7 @@ def process_interpolate(
     model_key: str,
     factor: int,
     progress_cb: Callable[[int, int, int], None],
+    stage_cb: Callable[[str], None] | None = None,
 ) -> dict:
     """Interpolate videos (slow motion) sequentially; a failing file never
     stops the batch.
@@ -327,7 +347,9 @@ def process_interpolate(
     overall percent (0-100).
     """
     results: dict = {"success": [], "failed": [], "times": []}
-    factory = _make_amt_backend_factory(model_key)
+    if stage_cb is not None:
+        stage_cb("Selecting the AMT backend…")
+    factory = _make_amt_backend_factory(model_key, stage_cb=stage_cb)
     selection = factory.selection
     if selection.fallback_reason:
         print(f"AMT backend fallback: {selection.fallback_reason}")
@@ -371,7 +393,9 @@ def process_interpolate(
                         fallback_reason=fallback_reason,
                         explicit_tensorrt=False,
                     )
-                    factory = _make_amt_backend_factory(model_key, fallback_selection)
+                    factory = _make_amt_backend_factory(
+                        model_key, fallback_selection, stage_cb=stage_cb
+                    )
                     selection = factory.selection
                     engine = factory.build()
 
@@ -453,6 +477,7 @@ def process_dedup(
     npass: str | int,
     factor: int,
     progress_cb: Callable[[int, int, int], None] | None = None,
+    stage_cb: Callable[[str], None] | None = None,
 ) -> dict:
     """Process anime frame interpolation using MultiPassDedup.
 
@@ -475,6 +500,8 @@ def process_dedup(
             )
             if progress_cb:
                 progress_cb(index, file_count, 0)
+            if index == 1 and stage_cb is not None:
+                stage_cb("Loading the MultiPassDedup model…")
             run_dedup_infer(
                 video_in=video,
                 video_out=out_path,

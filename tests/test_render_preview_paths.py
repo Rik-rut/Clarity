@@ -80,7 +80,7 @@ def test_job_output_files_are_absolute_after_success(tmp_path, monkeypatch):
     monkeypatch.chdir(out_dir)
     backend_relative = Path("output") / "render_done.mp4"
 
-    def fake_process(videos, profile, progress_cb):
+    def fake_process(videos, profile, progress_cb, stage_cb=None):
         progress_cb(1, 1, 100)
         return {"success": [backend_relative], "failed": [], "times": [0.1]}
 

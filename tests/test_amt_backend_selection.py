@@ -158,7 +158,7 @@ def test_auto_tensorrt_build_failure_retries_video_with_pytorch(
         def close(self):
             pass
 
-    def make_factory(model_key, selection=None):
+    def make_factory(model_key, selection=None, stage_cb=None):
         return FakeFactory(selection or trt_selection)
 
     monkeypatch.setattr(processor, "_make_amt_backend_factory", make_factory)
@@ -417,7 +417,7 @@ def test_processor_routes_windows_through_scheduler(
             return iter(frames)
 
     monkeypatch.setattr(processor, "AMTFrameScheduler", FakeScheduler, raising=False)
-    monkeypatch.setattr(processor, "_make_amt_backend_factory", lambda model, selection=None: SimpleNamespace(
+    monkeypatch.setattr(processor, "_make_amt_backend_factory", lambda model, selection=None, stage_cb=None: SimpleNamespace(
         selection=_selection("pytorch", "fp32", 2, None),
         build=lambda shape=None: FakeBackend(),
     ))
@@ -462,7 +462,7 @@ def test_processor_warms_up_each_backend_once_per_job(
     monkeypatch.setattr(
         processor,
         "_make_amt_backend_factory",
-        lambda model, selection=None: SimpleNamespace(
+        lambda model, selection=None, stage_cb=None: SimpleNamespace(
             selection=_selection("pytorch", "fp32", 2, None),
             build=lambda shape=None: WarmableBackend(),
         ),

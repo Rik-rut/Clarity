@@ -32,19 +32,20 @@
 
     .card { text-align: center; max-width: 30rem; padding: 2rem; }
 
+    /*
+     * The brand mark ships on a near-black square. `screen` blending makes
+     * that background disappear into the splash gradient while the glow and
+     * swirl stay intact, so no alpha cutout is needed.
+     */
     .mark {
-      width: 5rem; height: 5rem; margin: 0 auto 1.5rem;
-      border-radius: 1.25rem;
-      background: linear-gradient(150deg, var(--accent), #3f6d85);
-      box-shadow: 0 0 34px rgba(110, 164, 191, 0.35);
-      display: flex; align-items: center; justify-content: center;
+      width: 7rem; height: 7rem; margin: 0 auto 1.5rem; display: block;
+      mix-blend-mode: screen;
       animation: breathe 2.6s ease-in-out infinite;
     }
-    .mark span { font-size: 2.25rem; font-weight: 800; color: #10222b; letter-spacing: -0.02em; }
 
     @keyframes breathe {
-      0%, 100% { transform: scale(1); box-shadow: 0 0 22px rgba(110, 164, 191, 0.28); }
-      50% { transform: scale(1.03); box-shadow: 0 0 34px rgba(110, 164, 191, 0.55); }
+      0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px rgba(110, 164, 191, 0.22)); }
+      50% { transform: scale(1.03); filter: drop-shadow(0 0 18px rgba(110, 164, 191, 0.45)); }
     }
 
     h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: 0.08em; }
@@ -117,7 +118,7 @@
 </head>
 <body>
   <main class="card">
-    <div class="mark"><span>C</span></div>
+    <img class="mark" src="logo.png" alt="Clarity" />
     <h1>CLARITY</h1>
     <p class="sub">AI Video Studio</p>
 

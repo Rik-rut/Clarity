@@ -95,6 +95,30 @@ def open_browser_when_ready(url: str, delay: float = 1.0) -> None:
     t.start()
 
 
+def warm_heavy_imports(delay: float = 0.5) -> None:
+    """Import torch and probe the backend off the request path.
+
+    The first render (and ``/api/system/info``) needs torch, whose cold import
+    costs roughly ten seconds. Doing it in the background lets the window open
+    immediately instead of making the user wait at "Starting the studio server…".
+    Best effort: any failure is logged and ignored.
+    """
+    if os.environ.get("CLARITY_DISABLE_WARMUP") == "1":
+        return
+
+    def _warm() -> None:
+        time.sleep(delay)
+        try:
+            from video_upscaler.backend import detect_backend
+
+            detect_backend()
+            logger.debug("Heavy runtime warm-up complete")
+        except Exception as exc:  # noqa: BLE001 - warm-up must never break boot
+            logger.debug("Heavy runtime warm-up skipped: %s", exc)
+
+    threading.Thread(target=_warm, name="clarity-warmup", daemon=True).start()
+
+
 
 def run_server(
     host: str = "127.0.0.1",
@@ -129,6 +153,7 @@ def run_server(
         open_browser_when_ready(url, 1.0)
 
     app = create_app()
+    warm_heavy_imports()
     uvicorn.run(app, host=host, port=actual_port, log_level="info")
 
 

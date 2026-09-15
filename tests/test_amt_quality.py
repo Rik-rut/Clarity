@@ -115,7 +115,7 @@ def test_output_fps_preserved_and_duration_scales_with_factor(
         def close(self):
             pass
 
-    monkeypatch.setattr(processor, "_make_amt_backend_factory", lambda model, selection=None: FakeFactory())
+    monkeypatch.setattr(processor, "_make_amt_backend_factory", lambda model, selection=None, stage_cb=None: FakeFactory())
     monkeypatch.setattr(processor, "AMTFrameScheduler", AMTFrameScheduler, raising=False)
     monkeypatch.setattr(processor, "probe", lambda path: {
         "width": 5, "height": 3, "fps": 30.0, "duration": 9 / 30.0,
@@ -170,7 +170,7 @@ def test_audio_and_rotation_passthrough_unchanged(
         def close(self):
             pass
 
-    monkeypatch.setattr(processor, "_make_amt_backend_factory", lambda model, selection=None: FakeFactory())
+    monkeypatch.setattr(processor, "_make_amt_backend_factory", lambda model, selection=None, stage_cb=None: FakeFactory())
     monkeypatch.setattr(processor, "probe", lambda path: {
         "width": 5, "height": 3, "fps": 30.0, "duration": 0.1,
         "codec_name": "h264", "has_audio": has_audio, "rotation": rotation,

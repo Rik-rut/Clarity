@@ -9,6 +9,7 @@
     - src-tauri/resources/ffmpeg.exe
     - src-tauri/resources/ffprobe.exe
     - src-tauri/icons/ (icon.ico, 32x32.png, 128x128.png, 128x128@2x.png, icon.png)
+    - src-tauri/shell/logo.png
 
     The script is idempotent. It skips downloads if working binaries and icons are
     already present, unless -Force is specified. It checks local caches before
@@ -36,6 +37,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $ResourcesDir = Join-Path $RepoRoot "src-tauri\resources"
 $IconsDir = Join-Path $RepoRoot "src-tauri\icons"
+$ShellDir = Join-Path $RepoRoot "src-tauri\shell"
 $BrandLogo = Join-Path $RepoRoot "src\video_upscaler\web\static\clarity.jpg"
 
 function Write-Info ($msg) {
@@ -293,10 +295,12 @@ $png32Target = Join-Path $IconsDir "32x32.png"
 $png128Target = Join-Path $IconsDir "128x128.png"
 $png256Target = Join-Path $IconsDir "128x128@2x.png"
 $png512Target = Join-Path $IconsDir "icon.png"
+$shellLogoTarget = Join-Path $ShellDir "logo.png"
 
 $iconsExist = (Test-Path $icoTarget) -and ((Get-Item $icoTarget).Length -gt 1024) -and
               (Test-Path $png32Target) -and ((Get-Item $png32Target).Length -gt 100) -and
-              (Test-Path $png128Target) -and ((Get-Item $png128Target).Length -gt 100)
+              (Test-Path $png128Target) -and ((Get-Item $png128Target).Length -gt 100) -and
+              (Test-Path $shellLogoTarget) -and ((Get-Item $shellLogoTarget).Length -gt 1000)
 
 if ($iconsExist -and -not $Force) {
     Write-Success "Application icons already exist and are valid. (Use -Force to regenerate)"
@@ -313,13 +317,32 @@ from PIL import Image
 
 src_img = sys.argv[1]
 icons_dir = sys.argv[2]
+shell_dir = sys.argv[3]
 os.makedirs(icons_dir, exist_ok=True)
+os.makedirs(shell_dir, exist_ok=True)
 
 if os.path.exists(src_img):
     img = Image.open(src_img).convert("RGBA")
 else:
     # Procedural fallback
     img = Image.new("RGBA", (512, 512), (18, 24, 38, 255))
+
+# Splash mark: crop to the visible logo so the glow fills the frame. The
+# shell blends it with screen mode, so the dark background is harmless.
+gray = img.convert("L")
+mmask = gray.point(lambda p: 255 if p > 45 else 0)
+mbbox = mmask.getbbox()
+if mbbox:
+    mx0, my0, mx1, my1 = mbbox
+    mcx, mcy = (mx0 + mx1) / 2, (my0 + my1) / 2
+    mhalf = max(mx1 - mx0, my1 - my0) / 2 * 1.18
+    mhalf = min(mhalf, mcx, mcy, img.width - mcx, img.height - mcy)
+    mark = img.crop((int(mcx - mhalf), int(mcy - mhalf), int(mcx + mhalf), int(mcy + mhalf)))
+else:
+    mark = img
+mark.convert("RGB").resize((512, 512), Image.Resampling.LANCZOS).save(
+    os.path.join(shell_dir, "logo.png"), format="PNG", optimize=True
+)
 
 sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 img.save(os.path.join(icons_dir, "icon.ico"), format="ICO", sizes=sizes)
@@ -334,7 +357,7 @@ print("ICONS_OK")
     Set-Content -Path $tempPy -Value $pyScript -Encoding utf8
     try {
         if ($hasUv) {
-            $pyOutput = & "$uvTarget" run --with pillow python $tempPy $BrandLogo $IconsDir 2>&1
+            $pyOutput = & "$uvTarget" run --with pillow python $tempPy $BrandLogo $IconsDir $ShellDir 2>&1
             if ($pyOutput -match "ICONS_OK") {
                 $iconsGenerated = $true
             }
@@ -342,7 +365,7 @@ print("ICONS_OK")
         if (-not $iconsGenerated) {
             $pySys = Get-Command python.exe -ErrorAction SilentlyContinue
             if ($pySys) {
-                $pyOutput = & python $tempPy $BrandLogo $IconsDir 2>&1
+                $pyOutput = & python $tempPy $BrandLogo $IconsDir $ShellDir 2>&1
                 if ($pyOutput -match "ICONS_OK") {
                     $iconsGenerated = $true
                 }
@@ -393,6 +416,8 @@ print("ICONS_OK")
 
             $b512 = Resize-Bmp $srcBmp 512 512
             $b512.Save($png512Target, [System.Drawing.Imaging.ImageFormat]::Png)
+            if (-not (Test-Path $ShellDir)) { New-Item -ItemType Directory -Path $ShellDir | Out-Null }
+            $b512.Save($shellLogoTarget, [System.Drawing.Imaging.ImageFormat]::Png)
             $b512.Dispose()
 
             $hIcon = $b256.GetHicon()
@@ -409,10 +434,10 @@ print("ICONS_OK")
         }
     }
 
-    if (-not ((Test-Path $icoTarget) -and (Test-Path $png32Target) -and (Test-Path $png128Target))) {
+    if (-not ((Test-Path $icoTarget) -and (Test-Path $png32Target) -and (Test-Path $png128Target) -and (Test-Path $shellLogoTarget))) {
         throw "Failed to generate valid icons in $IconsDir"
     }
-    Write-Success "Icons generated successfully in $IconsDir"
+    Write-Success "Icons and splash mark generated successfully"
 }
 
 # -------------------------------------------------------------

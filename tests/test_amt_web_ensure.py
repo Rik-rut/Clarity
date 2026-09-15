@@ -64,7 +64,7 @@ def _record_and_materialize(calls):
 
 
 def _succeed(process_calls):
-    def fake_process(videos, model_key, factor, progress_cb):
+    def fake_process(videos, model_key, factor, progress_cb, stage_cb=None):
         process_calls.append((model_key, factor))
         progress_cb(1, 1, 100)
         return {"success": ["clip_slowed2x_amt.mp4"], "failed": [], "times": [0.1]}

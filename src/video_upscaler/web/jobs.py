@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from fastapi import WebSocket
@@ -234,6 +234,59 @@ class JobManager:
         last_file_idx = 0
 
 
+        def report_stage(text: str) -> None:
+            """Push a human-readable stage to the UI (keeps the user informed
+            through model loads and one-time engine builds)."""
+            if job.cancel_requested:
+                raise RuntimeError("Job cancelled by user")
+            job.stage = text
+            job.elapsed_seconds = time.perf_counter() - (
+                job.start_time or time.perf_counter()
+            )
+            self.broadcast_sync({"type": "job_progress", "job": job.to_dict()})
+
+
+        def install_missing_entries(
+            entries: List[Dict[str, Any]], end_percent: int = 5
+        ) -> None:
+            """Install missing hub entries with progress in the opening slice.
+
+            On-demand downloads during a render would otherwise leave the UI
+            stuck at "Starting <action>..." for the whole transfer.
+            """
+            from video_upscaler import modelhub
+
+            missing = modelhub.missing_entries(entries)
+            if not missing:
+                return
+            total = sum(int(e["size"]) for e in missing)
+            completed = 0
+            for entry in missing:
+                name = PurePosixPath(entry["path"]).name
+
+                def _progress(
+                    done: int,
+                    _total: int | None,
+                    base: int = completed,
+                    label: str = name,
+                ) -> None:
+                    if job.cancel_requested:
+                        raise RuntimeError("Job cancelled by user")
+                    fraction = (base + done) / total if total else 0.0
+                    fraction = min(max(fraction, 0.0), 1.0)
+                    job.percent = int(fraction * end_percent)
+                    job.stage = f"Downloading {label}…"
+                    job.elapsed_seconds = time.perf_counter() - (
+                        job.start_time or time.perf_counter()
+                    )
+                    self.broadcast_sync(
+                        {"type": "job_progress", "job": job.to_dict()}
+                    )
+
+                modelhub.install_entry(entry, progress_cb=_progress)
+                completed += int(entry["size"])
+
+
         def progress_callback(file_idx: int, file_count: int, percent: int) -> None:
             nonlocal file_eta_start, last_file_idx
             if job.cancel_requested:
@@ -273,7 +326,9 @@ class JobManager:
         try:
             if job.action == "Upscale":
                 profile = params.get("profile", "2x_Balanced")
-                results = process_videos(video_paths, profile, progress_callback)
+                results = process_videos(
+                    video_paths, profile, progress_callback, stage_cb=report_stage
+                )
             elif job.action == "Slow-motion":
                 model_key = params.get("model_key", "AMT-S")
                 factor = int(params.get("factor", 2))
@@ -313,14 +368,26 @@ class JobManager:
                         model_key, progress_cb=_amt_download_progress
                     )
                 results = process_interpolate(
-                    video_paths, model_key, factor, progress_callback
+                    video_paths,
+                    model_key,
+                    factor,
+                    progress_callback,
+                    stage_cb=report_stage,
                 )
             elif job.action == "Interpolate":
                 model = params.get("model", "gmfss")
                 npass = int(params.get("npass", 0))
                 factor = int(params.get("factor", 2))
+                from video_upscaler.dedup import _dedup_entries_for
+
+                install_missing_entries(_dedup_entries_for(model))
                 results = process_dedup(
-                    video_paths, model, npass, factor, progress_callback
+                    video_paths,
+                    model,
+                    npass,
+                    factor,
+                    progress_callback,
+                    stage_cb=report_stage,
                 )
             elif job.action == "MatAnyone2":
                 if not params.get("mask_png"):
@@ -330,17 +397,12 @@ class JobManager:
                 # from the hub before processing (no-op when installed).
                 from video_upscaler import modelhub
 
-                for group in ("matanyone", "sam"):
-                    for entry in modelhub.missing_entries(
-                        modelhub.entries(group=group)
-                    ):
-                        modelhub.install_entry(entry)
-
-                def stage_reporter(stage_text: str) -> None:
-                    job.stage = stage_text
-
+                install_missing_entries(
+                    modelhub.entries(group="matanyone")
+                    + modelhub.entries(group="sam")
+                )
                 results = process_matanyone2(
-                    video_paths, params, progress_callback, stage_reporter
+                    video_paths, params, progress_callback, report_stage
                 )
             else:
                 raise ValueError(f"Unknown action: {job.action}")

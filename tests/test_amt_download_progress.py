@@ -92,7 +92,7 @@ def test_slow_motion_job_broadcasts_download_progress(tmp_path, monkeypatch):
 
     monkeypatch.setattr("video_upscaler.modelhub.install_entry", fake_install)
 
-    def fake_process(videos, model_key, factor, progress_cb):
+    def fake_process(videos, model_key, factor, progress_cb, stage_cb=None):
         progress_cb(1, 1, 100)
         return {"success": ["clip_slowed2x_amt.mp4"], "failed": [], "times": [0.1]}
 

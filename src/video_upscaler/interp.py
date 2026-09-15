@@ -223,15 +223,19 @@ class AMTBackendFactory:
         model_key: str,
         selection: AMTBackendSelection,
         cache_root: Path | None = None,
+        stage_cb: Callable[[str], None] | None = None,
     ) -> None:
         self.model_key = model_key
         self.selection = selection
         self.cache_root = Path(cache_root) if cache_root is not None else None
+        self.stage_cb = stage_cb
         self._backends: dict[tuple[int, int] | None, object] = {}
 
     def build(self, frame_shape: tuple[int, int] | None = None):
         if self.selection.backend == "pytorch":
             if None not in self._backends:
+                if self.stage_cb is not None:
+                    self.stage_cb(f"Loading the AMT model ({self.model_key})…")
                 self._backends[None] = AMTInterpEngine(
                     self.model_key, precision=self.selection.precision
                 )
@@ -282,12 +286,19 @@ class AMTBackendFactory:
                 f"AMT TensorRT engine is missing and engine building is disabled: {engine_path}"
             )
         if config.AMT_ENGINE_CACHE and onnx_path.is_file() and engine_path.is_file():
+            if self.stage_cb is not None:
+                self.stage_cb(f"Loading the AMT TensorRT engine ({self.model_key})…")
             validate_amt_onnx(onnx_path)
         else:
             print(
                 f"Preparing AMT TensorRT engine for {self.model_key} "
                 "(one-time setup — this can take a few minutes)..."
             )
+            if self.stage_cb is not None:
+                self.stage_cb(
+                    f"Building the AMT TensorRT engine ({self.model_key}) — "
+                    "one-time setup, this can take a few minutes…"
+                )
             import warnings
 
             from torch.jit import TracerWarning
