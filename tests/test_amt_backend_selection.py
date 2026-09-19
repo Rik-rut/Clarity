@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -393,6 +396,136 @@ def test_engine_cache_disabled_is_forwarded_to_tensorrt_constructor(
     factory_type("AMT-S", selection, tmp_path).build((128, 128))
 
     assert observed == [{"use_cache": False}]
+
+
+def _write_exported_onnx(onnx_path: Path, *, checker_passed: bool = True) -> None:
+    """A finished ONNX export always lands with its sidecar written last."""
+    onnx_path.write_bytes(b"onnx")
+    onnx_path.with_name(onnx_path.name + ".json").write_text(
+        json.dumps(
+            {
+                "onnx_checker_passed": checker_passed,
+                "numerical_comparison": {"status": "measured"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_reusable_onnx_export_requires_a_fresh_validated_sidecar(tmp_path: Path) -> None:
+    onnx_path = tmp_path / "pair.onnx"
+    onnx_path.write_bytes(b"onnx")
+
+    # No sidecar: an earlier export never finished.
+    assert interp._reusable_onnx_export(onnx_path) is False
+
+    sidecar = Path(f"{onnx_path}.json")
+    sidecar.write_text(json.dumps({"onnx_checker_passed": True}), encoding="utf-8")
+    assert interp._reusable_onnx_export(onnx_path) is True
+
+    sidecar.write_text(json.dumps({"onnx_checker_passed": False}), encoding="utf-8")
+    assert interp._reusable_onnx_export(onnx_path) is False
+
+    sidecar.write_text(
+        json.dumps(
+            {
+                "onnx_checker_passed": True,
+                "numerical_comparison": {"status": "failed"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert interp._reusable_onnx_export(onnx_path) is False
+
+    # A graph rewritten after its sidecar means the last export was interrupted.
+    sidecar.write_text(json.dumps({"onnx_checker_passed": True}), encoding="utf-8")
+    future = time.time() + 10
+    os.utime(onnx_path, (future, future))
+    assert interp._reusable_onnx_export(onnx_path) is False
+
+
+def test_tensorrt_factory_reuses_validated_onnx_without_reexport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _reset_amt_config(monkeypatch)
+    selection = _selection("tensorrt", "fp16", 2, None)
+    engine_path = tmp_path / "profile.engine"  # intentionally absent
+    onnx_path = tmp_path / "profile.onnx"
+    _write_exported_onnx(onnx_path)
+    constructed: list[Path] = []
+    export_calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        "video_upscaler.interp.amt_engine_path",
+        lambda spec: engine_path,
+        raising=False,
+    )
+    monkeypatch.setattr(interp, "_tensorrt_onnx_path", lambda spec: onnx_path)
+    monkeypatch.setattr(
+        "video_upscaler.interp.validate_amt_onnx",
+        lambda path: {"path": str(path)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "video_upscaler.interp.export_amt_pair",
+        lambda *args: export_calls.append(args) or onnx_path,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "video_upscaler.interp.AMTTensorRTEngine",
+        lambda spec, path, **kwargs: constructed.append(path) or object(),
+        raising=False,
+    )
+    factory_type = getattr(interp, "AMTBackendFactory", None)
+    if factory_type is None:
+        pytest.fail("Task 5 AMT backend factory API is not implemented")
+
+    factory_type("AMT-S", selection, tmp_path).build((128, 128))
+
+    assert export_calls == []
+    assert constructed == [onnx_path]
+
+
+def test_tensorrt_factory_reexports_when_onnx_export_is_not_validated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _reset_amt_config(monkeypatch)
+    selection = _selection("tensorrt", "fp16", 2, None)
+    engine_path = tmp_path / "profile.engine"
+    onnx_path = tmp_path / "profile.onnx"
+    onnx_path.write_bytes(b"partial")  # graph present, no completed sidecar
+    export_calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        "video_upscaler.interp.amt_engine_path",
+        lambda spec: engine_path,
+        raising=False,
+    )
+    monkeypatch.setattr(interp, "_tensorrt_onnx_path", lambda spec: onnx_path)
+    monkeypatch.setattr(
+        "video_upscaler.interp.validate_amt_onnx",
+        lambda path: {"path": str(path)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "video_upscaler.interp.export_amt_pair",
+        lambda *args: export_calls.append(args) or onnx_path,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "video_upscaler.interp.AMTTensorRTEngine",
+        lambda spec, path, **kwargs: object(),
+        raising=False,
+    )
+    factory_type = getattr(interp, "AMTBackendFactory", None)
+    if factory_type is None:
+        pytest.fail("Task 5 AMT backend factory API is not implemented")
+
+    factory_type("AMT-S", selection, tmp_path).build((128, 128))
+
+    assert len(export_calls) == 1
 
 
 def test_processor_routes_windows_through_scheduler(

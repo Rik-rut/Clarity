@@ -164,8 +164,10 @@ class JobManager:
             job.cancel_requested = True
             job.status = "cancelled"
             job.stage = "Cancelled by user"
-            if self.active_job_id == job_id:
-                self.active_job_id = None
+            # Keep active_job_id until the worker thread actually exits. A
+            # cancelled render can still be inside an uninterruptible engine
+            # build; letting a second job start would race both on the same
+            # engine/ONNX cache files and on config.OUTPUT_DIR.
         self.broadcast_sync({"type": "job_cancelled", "job": job.to_dict()})
         return True
 
@@ -180,8 +182,13 @@ class JobManager:
         with self._lock:
             if self.active_job_id:
                 active = self.jobs.get(self.active_job_id)
-                if active and active.status in ("pending", "running"):
-                    raise RuntimeError("A render job is already running.")
+                if active is not None:
+                    # Includes a cancelled-but-still-winding-down job: its thread
+                    # may still be in an uninterruptible engine build.
+                    raise RuntimeError(
+                        "A render is still finishing. Wait for it to stop, then try again."
+                    )
+                self.active_job_id = None
 
             job_id = str(uuid.uuid4())[:8]
             job = JobInfo(
@@ -429,15 +436,17 @@ class JobManager:
             logger.exception("Job %s (%s) failed", job_id, job.action)
         finally:
             config.OUTPUT_DIR = orig_output_dir
-            with self._lock:
-                if self.active_job_id == job_id:
-                    self.active_job_id = None
             try:
                 from video_upscaler.memory import free_gpu_memory
 
                 free_gpu_memory()
             except Exception as cleanup_exc:
                 logger.debug("Post-job GPU memory cleanup error: %s", cleanup_exc)
+            # Release the slot only after cleanup so the next job cannot start
+            # while this thread is still freeing shared GPU resources.
+            with self._lock:
+                if self.active_job_id == job_id:
+                    self.active_job_id = None
             self.broadcast_sync({"type": "job_completed", "job": job.to_dict()})
 
 

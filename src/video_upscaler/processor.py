@@ -383,6 +383,13 @@ def process_interpolate(
                         f"{reason}"
                     )
                     print(fallback_reason)
+                    if stage_cb is not None:
+                        # Do not let a failed engine setup silently downgrade the
+                        # render to the much slower PyTorch path unseen.
+                        stage_cb(
+                            "TensorRT setup failed — rendering with PyTorch "
+                            f"(slower): {reason}"
+                        )
                     close = getattr(factory, "close", None)
                     if close is not None:
                         close()
@@ -500,8 +507,12 @@ def process_dedup(
             )
             if progress_cb:
                 progress_cb(index, file_count, 0)
-            if index == 1 and stage_cb is not None:
-                stage_cb("Loading the MultiPassDedup model…")
+
+            def _video_progress(fraction: float, _index: int = index) -> None:
+                if progress_cb:
+                    percent = min(99, max(0, int(fraction * 100)))
+                    progress_cb(_index, file_count, percent)
+
             run_dedup_infer(
                 video_in=video,
                 video_out=out_path,
@@ -512,7 +523,8 @@ def process_dedup(
                 enable_scdet=config.DEDUP_SCDET_DEFAULT,
                 scdet_threshold=config.DEDUP_SCDET_THRESHOLD,
                 hwaccel=config.USE_NVENC,
-                progress_cb=progress_cb,
+                progress_cb=_video_progress,
+                stage_cb=stage_cb,
             )
             if progress_cb:
                 progress_cb(index, file_count, 100)

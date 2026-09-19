@@ -84,6 +84,9 @@ class ClearVideosRequest(BaseModel):
 class BrowseDirRequest(BaseModel):
     initial_dir: Optional[str] = None
 
+class PreloadDedupRequest(BaseModel):
+    model: str = "gmfss"
+
 @router.get("/health")
 def get_health() -> Dict[str, Any]:
     """Liveness probe for the desktop shell.
@@ -139,12 +142,49 @@ def reset_system() -> Dict[str, Any]:
     if active:
         job_manager.cancel_job(active.job_id)
 
+    try:
+        from video_upscaler.dedup import stop_dedup_worker
+
+        stop_dedup_worker()
+    except Exception:
+        pass
+
     res = free_gpu_memory()
     return {
         "success": True,
         "message": "System state reset and GPU memory cleared.",
         "vram": res.get("vram", {}),
     }
+
+
+@router.post("/dedup/preload")
+def preload_dedup(req: PreloadDedupRequest = PreloadDedupRequest()) -> Dict[str, Any]:
+    """Warm the persistent MultiPassDedup worker in the background.
+
+    The studio calls this when the Interpolate tab opens so the first render
+    does not pay the model load. No-op when the weights are not installed yet
+    (the render then downloads them and loads on first use).
+    """
+    import threading
+
+    from video_upscaler.dedup import preload_dedup_model
+    from video_upscaler.dedup_backend import check_dedup_weights, validate_model_type
+
+    try:
+        model = validate_model_type(req.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if check_dedup_weights(model):
+        return {"success": True, "preloading": False, "reason": "weights-missing"}
+
+    threading.Thread(
+        target=preload_dedup_model,
+        args=(model,),
+        name="clarity-dedup-preload",
+        daemon=True,
+    ).start()
+    return {"success": True, "preloading": True}
 
 
 @router.get("/videos/scanned")

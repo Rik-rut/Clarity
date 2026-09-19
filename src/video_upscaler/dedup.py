@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import atexit
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import questionary
@@ -173,6 +176,270 @@ def build_dedup_plan() -> dict:
     }
 
 
+def _worker_env() -> dict:
+    """Environment for the worker: vendored models + video_upscaler importable."""
+    env = os.environ.copy()
+    pythonpath_parts = [
+        str(config.BASE_DIR / "src" / "video_upscaler" / "multipass_dedup"),
+        str(config.BASE_DIR / "src"),
+    ]
+    if "PYTHONPATH" in env:
+        pythonpath_parts.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
+class _WorkerRequestError(RuntimeError):
+    """The worker refused one request but is still healthy and reusable."""
+
+
+class _DedupWorker:
+    """One long-lived ``worker.py`` process shared by every dedup render.
+
+    Keeping the model resident removes the per-video load (torch/cupy import,
+    checkpoint loads, CUDA context, softsplat kernel compile, cuDNN autotune)
+    that previously ran again for every file and every render.
+    """
+
+    def __init__(self) -> None:
+        self._io_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._process: subprocess.Popen | None = None
+        self._log_handle = None
+        self._loaded: tuple[str, float] | None = None
+        self._log_path = config.CACHE_DIR / "dedup_worker.log"
+
+    # -- state ---------------------------------------------------------
+
+    def is_loaded(self, model_type: str, scale: float) -> bool:
+        with self._state_lock:
+            return self._loaded == (model_type, float(scale))
+
+    def _mark_loaded(self, model_type: str, scale: float) -> None:
+        with self._state_lock:
+            self._loaded = (model_type, float(scale))
+
+    # -- process lifecycle ---------------------------------------------
+
+    def _start(self) -> subprocess.Popen:
+        process = self._process
+        if process is not None and process.poll() is None:
+            return process
+        self._close_process()
+
+        script = (
+            config.BASE_DIR / "src" / "video_upscaler" / "multipass_dedup" / "worker.py"
+        )
+        if not script.is_file():
+            raise FileNotFoundError(f"MultiPassDedup worker not found at {script}")
+
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_handle = open(self._log_path, "ab", buffering=0)
+        try:
+            self._process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-u",
+                    str(script),
+                    "--weights",
+                    str(config.DEDUP_MODELS_DIR.resolve()),
+                ],
+                cwd=str(script.parent),
+                env=_worker_env(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=self._log_handle,
+                text=True,
+                bufsize=1,
+            )
+        except Exception:
+            self._close_process()
+            raise
+        with self._state_lock:
+            self._loaded = None
+        return self._process
+
+    def _close_process(self) -> None:
+        process, self._process = self._process, None
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.kill()
+            except OSError:
+                pass
+            for stream in (process.stdin, process.stdout):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except OSError:
+                    pass
+        handle, self._log_handle = self._log_handle, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+    def _diagnostics(self, message: str) -> str:
+        try:
+            tail = self._log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+        except OSError:
+            tail = ""
+        return f"{message}\n{tail}".strip()
+
+    # -- requests ------------------------------------------------------
+
+    def _exchange(self, payload: dict, on_progress=None) -> dict:
+        """Send one command and read protocol events until it terminates.
+
+        Caller must hold ``_io_lock``. A transport failure or a cancel tears
+        the worker down so a broken or busy process is never reused; a
+        per-request ``error`` event leaves the (healthy) worker alive.
+        """
+        try:
+            process = self._start()
+            assert process.stdin is not None and process.stdout is not None
+            process.stdin.write(json.dumps(payload) + "\n")
+            process.stdin.flush()
+        except Exception:
+            self._close_process()
+            raise
+
+        while True:
+            try:
+                line = process.stdout.readline()
+            except Exception:
+                self._close_process()
+                raise
+            if not line:
+                self._close_process()
+                raise RuntimeError(
+                    self._diagnostics("MultiPassDedup worker exited unexpectedly")
+                )
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = event.get("event")
+            if kind == "progress":
+                if on_progress is not None:
+                    try:
+                        on_progress(
+                            int(event.get("done") or 0), int(event.get("total") or 0)
+                        )
+                    except Exception:
+                        # Cancellation (or any callback failure) must stop the
+                        # busy worker rather than leave it mid-render.
+                        self._close_process()
+                        raise
+            elif kind == "ready":
+                return event
+            elif kind == "done":
+                return event
+            elif kind == "error":
+                raise _WorkerRequestError(
+                    str(event.get("message") or "worker error")
+                )
+
+    def run(
+        self,
+        *,
+        video: str,
+        output: str,
+        model_type: str,
+        npass: int,
+        times: int,
+        scale: float,
+        scdet: bool,
+        threshold: float,
+        hwaccel: bool,
+        on_progress=None,
+    ) -> None:
+        payload = {
+            "cmd": "run",
+            "video": video,
+            "output": output,
+            "model_type": model_type,
+            "npass": npass,
+            "times": times,
+            "scale": scale,
+            "scdet": scdet,
+            "threshold": threshold,
+            "hwaccel": hwaccel,
+        }
+        with self._io_lock:
+            self._exchange(payload, on_progress=on_progress)
+        self._mark_loaded(model_type, scale)
+
+    def preload(self, model_type: str, scale: float) -> bool:
+        """Load the model without running a video; never queues behind a run."""
+        if self.is_loaded(model_type, scale):
+            return True
+        if not self._io_lock.acquire(blocking=False):
+            return False
+        try:
+            if self.is_loaded(model_type, scale):
+                return True
+            self._exchange(
+                {"cmd": "load", "model_type": model_type, "scale": scale}
+            )
+            self._mark_loaded(model_type, scale)
+            return True
+        except Exception:
+            return False
+        finally:
+            self._io_lock.release()
+
+    def stop(self) -> None:
+        self._close_process()
+        with self._state_lock:
+            self._loaded = None
+
+
+_worker: _DedupWorker | None = None
+_worker_guard = threading.Lock()
+
+
+def _get_worker() -> _DedupWorker:
+    global _worker
+    with _worker_guard:
+        if _worker is None:
+            _worker = _DedupWorker()
+        return _worker
+
+
+def preload_dedup_model(model_type: str, scale: float | None = None) -> bool:
+    """Warm the persistent worker so the next render skips the model load.
+
+    Called in the background when the Interpolate tab opens. Returns False
+    when the weights are not installed yet or another run owns the worker.
+    """
+    model_type = validate_model_type(model_type)
+    if check_dedup_weights(model_type):
+        return False
+    worker = _get_worker()
+    return worker.preload(
+        model_type,
+        float(config.DEDUP_SCALE_DEFAULT if scale is None else scale),
+    )
+
+
+def stop_dedup_worker() -> None:
+    """Kill the resident worker (Reset App, shutdown, tests)."""
+    global _worker
+    with _worker_guard:
+        worker, _worker = _worker, None
+    if worker is not None:
+        worker.stop()
+
+
+atexit.register(stop_dedup_worker)
+
+
 def run_dedup_infer(
     video_in: Path,
     video_out: Path,
@@ -184,78 +451,50 @@ def run_dedup_infer(
     scdet_threshold: float = 0.3,
     hwaccel: bool = False,
     progress_cb=None,
+    stage_cb=None,
 ) -> None:
-    """Execute MultiPassDedup inference on a video file via infer.py."""
+    """Execute MultiPassDedup inference on a video through the persistent worker.
+
+    ``progress_cb`` receives a fraction in [0, 1] for the current video.
+    """
     model_type = validate_model_type(model_type)
     ensure_dedup_weights(model_type, auto_download=True)
-    script_path = config.BASE_DIR / "src" / "video_upscaler" / "multipass_dedup" / "infer.py"
-    weights_dir = config.DEDUP_MODELS_DIR
+    video_in = Path(video_in).resolve()
+    video_out = Path(video_out)
+    if not video_in.is_file():
+        raise FileNotFoundError(f"can't find the file {video_in}")
 
-    if not script_path.exists():
-        raise FileNotFoundError(f"MultiPassDedup infer.py not found at {script_path}")
+    worker = _get_worker()
+    if stage_cb is not None and not worker.is_loaded(model_type, scale):
+        stage_cb(f"Loading the MultiPassDedup model ({model_type.upper()})…")
 
-    # Temporary directory for intermediate output
-    with tempfile.TemporaryDirectory() as tmpdir:
-        temp_out = Path(tmpdir) / f"temp_{video_in.name}"
-        
-        env = os.environ.copy()
-        pythonpath_parts = [
-            str(config.BASE_DIR / "src" / "video_upscaler" / "multipass_dedup"),
-            str(config.BASE_DIR / "src"),
-        ]
-        if "PYTHONPATH" in env:
-            pythonpath_parts.append(env["PYTHONPATH"])
-        env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+    interpolating = False
 
-        cmd = [
-            sys.executable,
-            str(script_path),
-            "-i", str(video_in.resolve()),
-            "-o", str(temp_out.resolve()),
-            "-np", str(npass),
-            "-t", str(factor),
-            "-m", str(model_type),
-            "-scale", str(scale),
-            "-st", str(scdet_threshold),
-            "-w", str(weights_dir.resolve()),
-        ]
-        if enable_scdet:
-            cmd.append("-s")
-        if hwaccel:
-            cmd.append("-hw")
+    def on_frame_progress(done: int, total: int) -> None:
+        nonlocal interpolating
+        if not interpolating:
+            interpolating = True
+            if stage_cb is not None:
+                stage_cb(f"Interpolating {video_in.name}…")
+        if progress_cb is not None:
+            fraction = (done / total) if total else 0.0
+            progress_cb(min(max(fraction, 0.0), 1.0))
 
-
-        # Run process
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(config.BASE_DIR / "src" / "video_upscaler" / "multipass_dedup"),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        temp_out = Path(tmpdir) / video_in.name
+        worker.run(
+            video=str(video_in),
+            output=str(temp_out.resolve()),
+            model_type=model_type,
+            npass=int(npass),
+            times=int(factor),
+            scale=float(scale),
+            scdet=bool(enable_scdet),
+            threshold=float(scdet_threshold),
+            hwaccel=bool(hwaccel),
+            on_progress=on_frame_progress,
         )
-
-        # Stream output
-        output_lines = []
-        if proc.stdout:
-            for line in iter(proc.stdout.readline, ""):
-                output_lines.append(line)
-        proc.wait()
-
-        if proc.returncode != 0:
-            error_msg = "".join(output_lines).strip()
-            raise RuntimeError(f"MultiPassDedup failed (code {proc.returncode}):\n{error_msg}")
-
-        # If infer.py created temp_out or output file, move it to video_out
-        if temp_out.exists():
-            video_out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(temp_out), str(video_out))
-        else:
-            # Check if an output was generated in temp directory
-            generated = list(Path(tmpdir).glob("*"))
-            if generated:
-                shutil.move(str(generated[0]), str(video_out))
-            else:
-                raise RuntimeError(f"MultiPassDedup did not generate an output video.")
+        if not temp_out.exists():
+            raise RuntimeError("MultiPassDedup did not generate an output video.")
+        video_out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(temp_out), str(video_out))

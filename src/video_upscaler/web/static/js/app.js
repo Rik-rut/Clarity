@@ -988,6 +988,7 @@ document.addEventListener('DOMContentLoaded', () => {
       el.addEventListener('click', () => {
         state.dedupConfig.model = el.getAttribute('data-key');
         renderDedupModels();
+        preloadDedupModel();
         updateTargetInfo();
       });
     });
@@ -1015,6 +1016,23 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       applySplitView();
     }
+  }
+
+  // Warm the persistent MultiPassDedup worker as soon as the tab opens (or the
+  // model changes) so the first render does not pay the model load. The model
+  // stays resident for the rest of the session.
+  function preloadDedupModel() {
+    if (!state.preloadedDedupModels) state.preloadedDedupModels = {};
+    const model = (state.dedupConfig && state.dedupConfig.model) || 'gmfss';
+    if (state.preloadedDedupModels[model]) return;
+    state.preloadedDedupModels[model] = true;
+    fetch('/api/dedup/preload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model })
+    }).catch(() => {
+      delete state.preloadedDedupModels[model];
+    });
   }
 
   function setTab(tabName) {
@@ -1049,6 +1067,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (elems.panelMatanyone) elems.panelMatanyone.classList.add('hidden');
       if (elems.transportUnified) elems.transportUnified.classList.add('hidden');
       if (elems.transportDual) elems.transportDual.classList.remove('hidden');
+      preloadDedupModel();
     } else if (tabName === 'matanyone') {
       if (elems.tabMatanyone) elems.tabMatanyone.classList.add('active');
       if (elems.panelMatanyone) elems.panelMatanyone.classList.remove('hidden');

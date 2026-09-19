@@ -15,6 +15,7 @@ does not accelerate AMT.
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections.abc import Callable
@@ -215,6 +216,37 @@ def _tensorrt_onnx_path(spec) -> Path:
     return Path(path_builder(spec)).with_suffix(".onnx")
 
 
+def _reusable_onnx_export(onnx_path: Path) -> bool:
+    """True when a completed, validated ONNX export from an earlier attempt exists.
+
+    ``export_amt_pair`` writes ``<onnx>.json`` only after the graph passed the
+    ONNX checker and the PyTorch/ONNX Runtime comparison, so a present sidecar
+    that is newer than the graph is proof the export finished. Re-exporting
+    otherwise made every retry repeat the minutes-long torch export and ONNX
+    Runtime comparison even though nothing had changed.
+    """
+    onnx_path = Path(onnx_path)
+    if not onnx_path.is_file():
+        return False
+    sidecar = Path(f"{onnx_path}.json")
+    if not sidecar.is_file():
+        return False
+    try:
+        if sidecar.stat().st_mtime < onnx_path.stat().st_mtime - 1.0:
+            # The graph was (re)written after the sidecar: an earlier export
+            # was interrupted mid-write, so the file cannot be trusted.
+            return False
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict) or data.get("onnx_checker_passed") is not True:
+        return False
+    comparison = data.get("numerical_comparison")
+    if isinstance(comparison, dict) and comparison.get("status") == "failed":
+        return False
+    return True
+
+
 class AMTBackendFactory:
     """Build one AMT backend and cache shape-specific resources per job."""
 
@@ -279,15 +311,29 @@ class AMTBackendFactory:
         )
         engine_path = Path(engine_path_builder(spec))
         onnx_path = _tensorrt_onnx_path(spec)
-        if not config.AMT_ENGINE_BUILD and (
-            not engine_path.is_file() or not onnx_path.is_file()
-        ):
+        engine_files_present = engine_path.is_file() and onnx_path.is_file()
+        if not config.AMT_ENGINE_BUILD and not engine_files_present:
             raise AMTBackendUnavailable(
                 f"AMT TensorRT engine is missing and engine building is disabled: {engine_path}"
             )
-        if config.AMT_ENGINE_CACHE and onnx_path.is_file() and engine_path.is_file():
+        if config.AMT_ENGINE_CACHE and engine_files_present:
             if self.stage_cb is not None:
                 self.stage_cb(f"Loading the AMT TensorRT engine ({self.model_key})…")
+            validate_amt_onnx(onnx_path)
+        elif _reusable_onnx_export(onnx_path):
+            # A validated ONNX export from an earlier attempt is still on disk:
+            # reuse it and pay only the one-time engine build. Re-exporting here
+            # is what made every retry repeat the minutes-long torch export and
+            # ONNX Runtime comparison even when nothing had changed.
+            print(
+                f"Reusing cached AMT ONNX export for {self.model_key}; "
+                "building the one-time TensorRT engine..."
+            )
+            if self.stage_cb is not None:
+                self.stage_cb(
+                    f"Building the AMT TensorRT engine ({self.model_key}) — "
+                    "one-time setup for this resolution, keep Clarity open…"
+                )
             validate_amt_onnx(onnx_path)
         else:
             print(
@@ -296,8 +342,8 @@ class AMTBackendFactory:
             )
             if self.stage_cb is not None:
                 self.stage_cb(
-                    f"Building the AMT TensorRT engine ({self.model_key}) — "
-                    "one-time setup, this can take a few minutes…"
+                    f"Preparing the AMT TensorRT engine ({self.model_key}) — "
+                    "one-time export + build, keep Clarity open…"
                 )
             import warnings
 

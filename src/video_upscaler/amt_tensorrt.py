@@ -187,12 +187,49 @@ def ensure_amt_engine(
     cached = _read_metadata(_metadata_path(engine_path))
     if use_cache and engine_path.is_file() and cached == current:
         return engine_path
+    if use_cache:
+        _report_cache_miss(spec, engine_path, cached, current)
     if not allow_build:
         raise RuntimeError(
             f"AMT TensorRT engine is unavailable or incompatible and engine building "
             f"is disabled: {engine_path}"
         )
-    return _build_amt_engine(spec, onnx_path)
+    try:
+        return _build_amt_engine(spec, onnx_path)
+    except Exception:
+        print(f"AMT TensorRT engine build failed for {spec.model_key}:")
+        import traceback
+
+        traceback.print_exc()
+        raise
+
+
+def _report_cache_miss(
+    spec: AMTEngineSpec,
+    engine_path: Path,
+    cached: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> None:
+    """Explain why a cached engine is not reused (visible in the backend log)."""
+    if not engine_path.is_file():
+        print(
+            f"AMT TensorRT cache miss ({spec.model_key}): no cached engine at "
+            f"{engine_path.name}"
+        )
+        return
+    if cached is None:
+        print(
+            f"AMT TensorRT cache miss ({spec.model_key}): engine metadata is missing "
+            f"for {engine_path.name}"
+        )
+        return
+    keys = set(cached) | set(current)
+    differences = sorted(key for key in keys if cached.get(key) != current.get(key))
+    detail = ", ".join(differences) if differences else "unknown"
+    print(
+        f"AMT TensorRT cache miss ({spec.model_key}): changed {detail} "
+        f"for {engine_path.name}"
+    )
 
 
 def _configure_fp16(trt: Any, config: Any) -> bool:
@@ -282,6 +319,7 @@ def _build_amt_engine(spec: AMTEngineSpec, onnx_path: Path) -> Path:
         f"Building TensorRT FP16 engine for {spec.model_key} "
         f"({spec.padded_height}x{spec.padded_width}) — one-time, please wait..."
     )
+    build_started = time.perf_counter()
 
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
@@ -325,6 +363,10 @@ def _build_amt_engine(spec: AMTEngineSpec, onnx_path: Path) -> Path:
         temporary.write_bytes(bytes(serialized))
         temporary.replace(output_path)
         _write_metadata(_metadata_path(output_path), _cache_metadata(spec, onnx_path))
+        print(
+            f"Cached AMT TensorRT engine for {spec.model_key} "
+            f"({output_path.name}) in {time.perf_counter() - build_started:.0f}s"
+        )
         return output_path
     finally:
         if graph_path != onnx_path:

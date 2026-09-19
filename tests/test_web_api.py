@@ -160,3 +160,53 @@ def test_system_reset_endpoint():
     assert "vram" in data
 
 
+def test_dedup_preload_skips_when_weights_missing(monkeypatch):
+    app = create_app()
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "video_upscaler.dedup_backend.check_dedup_weights",
+        lambda model: "missing",
+    )
+
+    resp = client.post("/api/dedup/preload", json={"model": "gmfss"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "success": True,
+        "preloading": False,
+        "reason": "weights-missing",
+    }
+
+
+def test_dedup_preload_starts_background_load(monkeypatch):
+    import time
+
+    app = create_app()
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "video_upscaler.dedup_backend.check_dedup_weights", lambda model: None
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "video_upscaler.dedup.preload_dedup_model",
+        lambda model: calls.append(model) or True,
+    )
+
+    resp = client.post("/api/dedup/preload", json={"model": "gmfss"})
+
+    assert resp.status_code == 200
+    assert resp.json()["preloading"] is True
+    for _ in range(50):
+        if calls:
+            break
+        time.sleep(0.02)
+    assert calls == ["gmfss"]
+
+
+def test_dedup_preload_rejects_unknown_model():
+    app = create_app()
+    client = TestClient(app)
+    resp = client.post("/api/dedup/preload", json={"model": "not-a-model"})
+    assert resp.status_code == 400
+
+
