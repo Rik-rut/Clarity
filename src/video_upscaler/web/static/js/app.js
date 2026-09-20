@@ -167,28 +167,94 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 4000);
   }
 
+  let hardwarePollTimer = null;
+  let hardwarePollTries = 0;
+  const MAX_HARDWARE_POLL_TRIES = 60;
+
+  function stopHardwarePoller() {
+    if (hardwarePollTimer) {
+      clearInterval(hardwarePollTimer);
+      hardwarePollTimer = null;
+    }
+  }
+
+  function pollHardwareDetection() {
+    stopHardwarePoller();
+    hardwarePollTries = 0;
+    hardwarePollTimer = setInterval(async () => {
+      hardwarePollTries++;
+      if (hardwarePollTries > MAX_HARDWARE_POLL_TRIES) {
+        stopHardwarePoller();
+        return;
+      }
+      try {
+        const resp = await fetch('/api/system/info');
+        if (resp.ok) {
+          const info = await resp.json();
+          if (info.backend_label) {
+            stopHardwarePoller();
+            if (state.systemInfo) {
+              state.systemInfo.backend = info.backend;
+              state.systemInfo.backend_label = info.backend_label;
+              state.systemInfo.device = info.device;
+            }
+            if (elems.backendDeviceText) {
+              elems.backendDeviceText.textContent = info.backend_label;
+            }
+          }
+        }
+      } catch (e) {
+        // Transient network error; continue polling up to limit
+      }
+    }, 1000);
+  }
+
+  let systemInfoRetryTimer = null;
+  let systemInfoRetries = 0;
+  let videosRetryTimer = null;
+  let videosRetries = 0;
+  const MAX_FETCH_RETRIES = 5;
+
   // 1. Fetch System Info & Scanned Videos
   async function loadSystemInfo() {
     try {
       const resp = await fetch('/api/system/info');
       if (resp.ok) {
+        systemInfoRetries = 0;
         state.systemInfo = await resp.json();
-        if (elems.backendDeviceText && state.systemInfo.backend_label) {
-          elems.backendDeviceText.textContent = state.systemInfo.backend_label;
+        if (elems.backendDeviceText) {
+          if (state.systemInfo.backend_label) {
+            stopHardwarePoller();
+            elems.backendDeviceText.textContent = state.systemInfo.backend_label;
+          } else {
+            elems.backendDeviceText.textContent = 'Detecting hardware…';
+            pollHardwareDetection();
+          }
         }
         renderProfiles();
         renderAmtModels();
         renderDedupModels();
+        return;
       }
     } catch (e) {
       console.warn('System info load warning:', e);
     }
+    if (systemInfoRetries < MAX_FETCH_RETRIES) {
+      systemInfoRetries++;
+      const delay = Math.min(1000 * Math.pow(1.5, systemInfoRetries - 1), 5000);
+      clearTimeout(systemInfoRetryTimer);
+      systemInfoRetryTimer = setTimeout(loadSystemInfo, delay);
+    }
   }
 
   async function loadVideos() {
+    if (elems.videoList && (!state.videos || state.videos.length === 0) && !elems.videoList.children.length) {
+      elems.videoList.innerHTML = '<div style="font-size: 0.75rem; color: var(--text-muted); padding: 0.75rem 0; text-align: center;">Loading videos…</div>';
+    }
     try {
       const resp = await fetch('/api/videos/scanned');
       if (resp.ok) {
+        videosRetries = 0;
         const data = await resp.json();
         state.videos = data.videos || [];
         
@@ -212,9 +278,16 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRenderButtonLabel();
         updateQueueUI();
         updateMaRenderButton();
+        return;
       }
     } catch (e) {
       console.warn('Video scan load warning:', e);
+    }
+    if (videosRetries < MAX_FETCH_RETRIES) {
+      videosRetries++;
+      const delay = Math.min(1000 * Math.pow(1.5, videosRetries - 1), 5000);
+      clearTimeout(videosRetryTimer);
+      videosRetryTimer = setTimeout(loadVideos, delay);
     }
   }
 
@@ -466,6 +539,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 4. Output Destination Accordion & Folder Chooser
   async function pickOutputDirectory(initialDir) {
+    let resolvedDir = initialDir;
+    try {
+      const resolveResp = await fetch('/api/directories/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: initialDir })
+      });
+      if (resolveResp.ok) {
+        const resolveData = await resolveResp.json();
+        if (resolveData && resolveData.path) {
+          resolvedDir = resolveData.path;
+        }
+      }
+    } catch (e) {
+      console.debug('Directory resolve error:', e);
+    }
+
     const invoke = tauriInvoke();
     if (invoke) {
       try {
@@ -477,7 +567,7 @@ document.addEventListener('DOMContentLoaded', () => {
             directory: true,
             multiple: false,
             title: 'Select Output Destination',
-            defaultPath: initialDir
+            defaultPath: resolvedDir
           }
         });
         return typeof picked === 'string' && picked ? picked : null;
@@ -489,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const resp = await fetch('/api/directories/browse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initial_dir: initialDir })
+      body: JSON.stringify({ initial_dir: resolvedDir })
     });
     const data = await resp.json();
     return data && data.success && data.path ? data.path : null;
@@ -2547,10 +2637,6 @@ document.addEventListener('DOMContentLoaded', () => {
     resetRenderUI();
     updateMaRenderButton();
     if (job.status === 'completed') {
-      // Queue is done: clear the selection so Cancel/queue don't linger.
-      // On failure the selection is kept so the user can retry.
-      state.selectedVideos = [];
-      updateQueueUI();
       if (elems.renderCompletedBanner) elems.renderCompletedBanner.classList.remove('hidden');
       if (elems.renderTotalTime) elems.renderTotalTime.textContent = `Render completed in ${job.elapsed_formatted}`;
       showToast(`Render finished in ${job.elapsed_formatted}!`, 'success');

@@ -101,3 +101,36 @@ def test_backend_label() -> None:
     assert backend.backend_label("torch-cuda") == "CUDA (torch fp16)"
     assert backend.backend_label("ncnn") == "ncnn Vulkan"
     assert backend.backend_label("torch-cpu") == "CPU (torch)"
+
+
+def test_prime_detection_caches_and_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from video_upscaler import backend
+
+    backend._reset_detection_cache()
+    try:
+        assert backend.cached_detection() is None
+
+        monkeypatch.setattr("video_upscaler.backend.detect_backend", lambda: "torch-cpu")
+        monkeypatch.setattr("video_upscaler.cugan.detect_device", lambda: "cpu")
+
+        result1 = backend.prime_detection()
+        assert result1 == {
+            "backend": "torch-cpu",
+            "backend_label": "CPU (torch)",
+            "device": "cpu",
+        }
+        assert backend.cached_detection() == result1
+
+        # Second call returns identical cached result without calling detectors again
+        monkeypatch.setattr(
+            "video_upscaler.backend.detect_backend",
+            lambda: (_ for _ in ()).throw(RuntimeError("Should not be called")),
+        )
+        result2 = backend.prime_detection()
+        assert result2 == result1
+        assert backend.cached_detection() == result1
+    finally:
+        backend._reset_detection_cache()
+

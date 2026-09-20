@@ -29,8 +29,7 @@ import cv2
 import numpy as np
 
 from video_upscaler import config
-from video_upscaler.backend import backend_label, detect_backend
-from video_upscaler.cugan import detect_device
+from video_upscaler.backend import backend_label, cached_detection, ensure_prime_detection
 from video_upscaler.ffmpeg import decode_frames, probe
 from video_upscaler.models import (
     INTERP_MODELS,
@@ -84,6 +83,9 @@ class ClearVideosRequest(BaseModel):
 class BrowseDirRequest(BaseModel):
     initial_dir: Optional[str] = None
 
+class ResolveDirRequest(BaseModel):
+    path: Optional[str] = None
+
 class PreloadDedupRequest(BaseModel):
     model: str = "gmfss"
 
@@ -100,9 +102,16 @@ def get_health() -> Dict[str, Any]:
 
 @router.get("/system/info")
 def get_system_info() -> Dict[str, Any]:
-    backend = detect_backend()
-    device = detect_device()
-    b_label = backend_label(backend)
+    cached = cached_detection()
+    if cached is None:
+        ensure_prime_detection()
+        backend = None
+        b_label = None
+        device = None
+    else:
+        backend = cached.get("backend")
+        b_label = cached.get("backend_label")
+        device = cached.get("device")
     profiles = [
         {
             "name": name,
@@ -187,9 +196,28 @@ def preload_dedup(req: PreloadDedupRequest = PreloadDedupRequest()) -> Dict[str,
     return {"success": True, "preloading": True}
 
 
+def _resolve_user_dir(value: Optional[str | Path]) -> Path:
+    """Resolve user-supplied directory path against DATA_DIR or OUTPUT_DIR.
+
+    Absolute paths stay untouched. Relative paths join config.DATA_DIR.
+    Empty / None values default to config.OUTPUT_DIR. No side effects or mkdir.
+    """
+    if value is None:
+        return config.OUTPUT_DIR.resolve()
+    val_str = str(value).strip()
+    if not val_str:
+        return config.OUTPUT_DIR.resolve()
+    p = Path(value)
+    if p.is_absolute():
+        return p.resolve()
+    if p.anchor:
+        return (config.DATA_DIR / p.relative_to(p.anchor)).resolve()
+    return (config.DATA_DIR / p).resolve()
+
+
 @router.get("/videos/scanned")
 def get_scanned_videos(folder: Optional[str] = None) -> Dict[str, Any]:
-    target_dir = Path(folder) if folder else config.INPUT_DIR
+    target_dir = _resolve_user_dir(folder) if folder is not None else config.INPUT_DIR
     if not target_dir.exists():
         target_dir.mkdir(parents=True, exist_ok=True)
     videos = scan_videos(target_dir)
@@ -372,7 +400,7 @@ async def browse_directory(req: BrowseDirRequest = BrowseDirRequest()) -> Dict[s
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
-            init_dir = req.initial_dir or str(config.OUTPUT_DIR.resolve())
+            init_dir = str(_resolve_user_dir(req.initial_dir))
             path = filedialog.askdirectory(initialdir=init_dir, title="Select Output Destination")
             root.destroy()
             return path if path else None
@@ -383,6 +411,12 @@ async def browse_directory(req: BrowseDirRequest = BrowseDirRequest()) -> Dict[s
     if picked_path:
         return {"success": True, "path": picked_path, "cancelled": False}
     return {"success": False, "cancelled": True}
+
+
+@router.post("/directories/resolve")
+def resolve_directory(req: ResolveDirRequest = ResolveDirRequest()) -> Dict[str, Any]:
+    resolved = _resolve_user_dir(req.path)
+    return {"path": str(resolved)}
 
 
 @router.get("/videos/thumbnail")

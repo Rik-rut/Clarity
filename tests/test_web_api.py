@@ -24,6 +24,36 @@ def test_system_info_endpoint():
     assert len(data["profiles"]) > 0
 
 
+def test_system_info_cold_cache(monkeypatch):
+    from video_upscaler import backend
+
+    backend._reset_detection_cache()
+    try:
+        monkeypatch.setattr(
+            "video_upscaler.web.routes.api.ensure_prime_detection",
+            lambda: None,
+        )
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/system/info")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "backend" in data
+        assert data["backend"] is None
+        assert "backend_label" in data
+        assert data["backend_label"] is None
+        assert "device" in data
+        assert data["device"] is None
+        assert "profiles" in data
+        assert len(data["profiles"]) > 0
+        assert "slow_mo_models" in data
+        assert len(data["slow_mo_models"]) > 0
+        assert "dedup_models" in data
+        assert len(data["dedup_models"]) > 0
+    finally:
+        backend._reset_detection_cache()
+
+
 
 def test_validate_directory():
     app = create_app()
@@ -32,6 +62,50 @@ def test_validate_directory():
     assert resp.status_code == 200
     data = resp.json()
     assert data["valid"] is True
+
+
+def test_resolve_user_dir_helper(tmp_path):
+    from video_upscaler import config
+    from video_upscaler.web.routes.api import _resolve_user_dir
+
+    # Absolute path untouched (resolved)
+    abs_dir = tmp_path / "custom_abs"
+    assert _resolve_user_dir(str(abs_dir)) == abs_dir.resolve()
+    assert _resolve_user_dir(abs_dir) == abs_dir.resolve()
+
+    # Relative path joins DATA_DIR
+    rel_dir = "custom_relative"
+    assert _resolve_user_dir(rel_dir) == (config.DATA_DIR / rel_dir).resolve()
+
+    # Empty / None defaults to OUTPUT_DIR
+    assert _resolve_user_dir("") == config.OUTPUT_DIR.resolve()
+    assert _resolve_user_dir("   ") == config.OUTPUT_DIR.resolve()
+    assert _resolve_user_dir(None) == config.OUTPUT_DIR.resolve()
+
+
+def test_resolve_directory_endpoint(tmp_path):
+    from video_upscaler import config
+
+    app = create_app()
+    client = TestClient(app)
+
+    # Empty path -> OUTPUT_DIR
+    resp = client.post("/api/directories/resolve", json={})
+    assert resp.status_code == 200
+    assert resp.json()["path"] == str(config.OUTPUT_DIR.resolve())
+
+    # "output" relative -> OUTPUT_DIR
+    resp = client.post("/api/directories/resolve", json={"path": "output"})
+    assert resp.status_code == 200
+    assert resp.json()["path"] == str(config.OUTPUT_DIR.resolve())
+
+    # Absolute path untouched
+    abs_target = tmp_path / "nonexistent_resolve_target"
+    resp = client.post("/api/directories/resolve", json={"path": str(abs_target)})
+    assert resp.status_code == 200
+    assert resp.json()["path"] == str(abs_target.resolve())
+    # Ensure no side-effects / no mkdir
+    assert not abs_target.exists()
 
 
 

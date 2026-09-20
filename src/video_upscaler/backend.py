@@ -10,6 +10,8 @@ lazy so tests stay torch-free.
 from __future__ import annotations
 
 import importlib
+import threading
+from typing import Any
 
 from video_upscaler import config
 
@@ -83,3 +85,70 @@ def detect_backend() -> str:
 def backend_label(backend: str) -> str:
     """Human-readable label for a backend key."""
     return _LABELS.get(backend, backend)
+
+
+_detection_lock = threading.Lock()
+_cached_detection: dict[str, str] | None = None
+_priming_started = False
+
+
+def cached_detection() -> dict[str, str] | None:
+    """Return the cached backend/device detection dict or None if cold."""
+    return _cached_detection
+
+
+def prime_detection() -> dict[str, str]:
+    """Compute and cache backend + device detection once (thread-safe, idempotent).
+
+    Falls back to 'torch-cpu' / 'cpu' if detection fails.
+    """
+    global _cached_detection, _priming_started
+    with _detection_lock:
+        if _cached_detection is not None:
+            return _cached_detection
+
+        _priming_started = True
+
+        try:
+            b = detect_backend()
+        except Exception:
+            b = "torch-cpu"
+
+        try:
+            from video_upscaler.cugan import detect_device
+
+            d = detect_device()
+        except Exception:
+            d = "cpu"
+
+        _cached_detection = {
+            "backend": b,
+            "backend_label": backend_label(b),
+            "device": d,
+        }
+        return _cached_detection
+
+
+def ensure_prime_detection() -> None:
+    """Kick off prime_detection in a background thread if not already running."""
+    global _priming_started
+    if _cached_detection is not None or _priming_started:
+        return
+    with _detection_lock:
+        if _cached_detection is not None or _priming_started:
+            return
+        _priming_started = True
+        threading.Thread(
+            target=prime_detection,
+            name="clarity-prime-detection",
+            daemon=True,
+        ).start()
+
+
+def _reset_detection_cache() -> None:
+    """Reset cached detection (intended for tests)."""
+    global _cached_detection, _priming_started
+    with _detection_lock:
+        _cached_detection = None
+        _priming_started = False
+

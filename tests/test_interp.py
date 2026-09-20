@@ -30,8 +30,8 @@ def test_interp_model_manifest():
         assert m.description_for_interp_model(key)
 
 
-def test_interp_output_tag_and_unique(tmp_path: Path):
-    config.OUTPUT_DIR = tmp_path
+def test_interp_output_tag_and_unique(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
     tag = slowed_output_tag(4, "AMT-L")
     assert tag == "slowed4x_amt-l"
     out = unique_interp_output_path(tmp_path, "clip.mp4", 4, "AMT-L")

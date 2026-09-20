@@ -109,9 +109,9 @@ def warm_heavy_imports(delay: float = 0.5) -> None:
     def _warm() -> None:
         time.sleep(delay)
         try:
-            from video_upscaler.backend import detect_backend
+            from video_upscaler.backend import prime_detection
 
-            detect_backend()
+            prime_detection()
             logger.debug("Heavy runtime warm-up complete")
         except Exception as exc:  # noqa: BLE001 - warm-up must never break boot
             logger.debug("Heavy runtime warm-up skipped: %s", exc)
