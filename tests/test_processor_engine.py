@@ -108,6 +108,12 @@ def test_tensorrt_forced_2x_builds_trt_even_with_trt_backend(
 def test_effective_backend_2x_keeps_tensorrt() -> None:
     assert processor.effective_backend("tensorrt", "2x_Balanced") == "tensorrt"
 
+def test_effective_backend_1x_keeps_tensorrt() -> None:
+    assert processor.effective_backend("tensorrt", "1x_Balanced") == "tensorrt"
+    assert processor.effective_backend("tensorrt", "1x_Clean") == "tensorrt"
+
+
+
 
 def test_effective_backend_3x_falls_back_in_auto(
     monkeypatch: pytest.MonkeyPatch,

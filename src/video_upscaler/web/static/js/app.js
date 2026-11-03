@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     slowmoConfig: { factor: 2, model_key: 'AMT-S' },
     dedupConfig: { factor: 2, model: 'gmfss', npass: 0 },
     activeJob: null,
+    pendingUpdate: null,
     systemInfo: null,
     isUploading: false,
     videoToRename: null,
@@ -149,7 +150,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renameInput: document.getElementById('rename-input'),
     btnCloseRename: document.getElementById('btn-close-rename'),
     btnCancelRename: document.getElementById('btn-cancel-rename'),
-    btnConfirmRename: document.getElementById('btn-confirm-rename')
+    btnConfirmRename: document.getElementById('btn-confirm-rename'),
+    btnActivity: document.getElementById('btn-activity'),
+    activityBadge: document.getElementById('activity-badge'),
+    activityPanel: document.getElementById('activity-panel'),
+    activityList: document.getElementById('activity-list'),
+    btnActivityClear: document.getElementById('btn-activity-clear'),
+    btnCheckUpdates: document.getElementById('btn-check-updates')
   };
 
   // Lightweight Toast System
@@ -2667,6 +2674,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       showToast(`Render failed: ${job.error_message || 'Unknown error'}`, 'error');
     }
+    if (typeof fetchActivity === "function") fetchActivity();
   }
 
   function handleJobCancelled() {
@@ -2676,6 +2684,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resetRenderUI();
     updateMaRenderButton();
     showToast('Render cancelled', 'info');
+    if (typeof fetchActivity === "function") fetchActivity();
   }
 
   function startStatusPoller() {
@@ -2736,8 +2745,10 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!statusPollTimer) startStatusPoller();
         } else if (data.type === 'job_cancelled') {
           handleJobCancelled();
+          fetchActivity();
         } else if (data.type === 'job_completed') {
           handleJobCompleted(data.job);
+          fetchActivity();
         }
       } catch (e) {
         console.warn('WS parse error:', e);
@@ -2758,9 +2769,361 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
+  // 16. Recent Activity Panel
+  function formatRelativeTime(isoString) {
+    if (!isoString) return '';
+    try {
+      const date = new Date(isoString);
+      const now = new Date();
+      const diffSec = Math.floor((now - date) / 1000);
+      if (diffSec < 60) return 'Just now';
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return `${diffMin}m ago`;
+      const diffHr = Math.floor(diffMin / 60);
+      if (diffHr < 24) return `${diffHr}h ago`;
+      return date.toLocaleDateString();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async function copyActivityPath(pathText) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(pathText);
+        showToast('Path copied to clipboard!', 'info');
+        return;
+      } catch (e) {
+        // Fall back below
+      }
+    }
+    const ta = document.createElement('textarea');
+    ta.value = pathText;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      showToast('Path copied to clipboard!', 'info');
+    } catch (e) {
+      showToast('Failed to copy path', 'error');
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
+  function renderActivityList(entries) {
+    if (!elems.activityList) return;
+    elems.activityList.innerHTML = '';
+
+    if (state.pendingUpdate) {
+      const banner = document.createElement('div');
+      banner.className = 'activity-update-banner';
+
+      const bannerTop = document.createElement('div');
+      bannerTop.className = 'activity-update-top';
+      const title = document.createElement('span');
+      title.className = 'activity-update-title';
+      title.textContent = `✨ Update Available: v${state.pendingUpdate.version}`;
+      bannerTop.appendChild(title);
+      const chip = document.createElement('span');
+      chip.className = 'activity-chip activity-chip-status completed';
+      chip.textContent = 'New';
+      bannerTop.appendChild(chip);
+      banner.appendChild(bannerTop);
+
+      if (state.pendingUpdate.body) {
+        const notes = document.createElement('div');
+        notes.className = 'activity-update-notes';
+        notes.textContent = state.pendingUpdate.body;
+        banner.appendChild(notes);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'activity-update-actions';
+
+      const btnInstall = document.createElement('button');
+      btnInstall.className = 'btn-update-install';
+      btnInstall.type = 'button';
+      btnInstall.textContent = 'Install & Restart';
+      btnInstall.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        installUpdate();
+      });
+      actions.appendChild(btnInstall);
+
+      const btnLater = document.createElement('button');
+      btnLater.className = 'btn-update-later';
+      btnLater.type = 'button';
+      btnLater.textContent = 'Later';
+      btnLater.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        state.pendingUpdate = null;
+        renderActivityList(entries);
+        fetchActivity();
+      });
+      actions.appendChild(btnLater);
+
+      banner.appendChild(actions);
+      elems.activityList.appendChild(banner);
+    }
+
+    if (!entries || entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'activity-empty';
+      empty.textContent = 'No recent activity recorded yet.';
+      elems.activityList.appendChild(empty);
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = `activity-item status-${entry.status || 'completed'}`;
+
+      // Top row: action & chips
+      const topRow = document.createElement('div');
+      topRow.className = 'activity-item-top';
+
+      const actionSpan = document.createElement('span');
+      actionSpan.className = 'activity-item-action';
+      actionSpan.textContent = entry.action || 'Job';
+      topRow.appendChild(actionSpan);
+
+      const chipsDiv = document.createElement('div');
+      chipsDiv.className = 'activity-item-chips';
+
+      // Summary chips (e.g. profile, model, factor)
+      if (entry.summary && typeof entry.summary === 'object') {
+        if (entry.summary.profile) {
+          const chip = document.createElement('span');
+          chip.className = 'activity-chip';
+          chip.textContent = entry.summary.profile;
+          chipsDiv.appendChild(chip);
+        } else if (entry.summary.model) {
+          const chip = document.createElement('span');
+          chip.className = 'activity-chip';
+          const factorStr = entry.summary.factor ? ` ${entry.summary.factor}x` : '';
+          chip.textContent = `${entry.summary.model}${factorStr}`;
+          chipsDiv.appendChild(chip);
+        }
+      }
+
+      // Status chip
+      const statusChip = document.createElement('span');
+      statusChip.className = `activity-chip activity-chip-status ${entry.status || 'completed'}`;
+      statusChip.textContent = entry.status || 'completed';
+      chipsDiv.appendChild(statusChip);
+
+      topRow.appendChild(chipsDiv);
+      item.appendChild(topRow);
+
+      // Time row
+      const timeRow = document.createElement('div');
+      timeRow.className = 'activity-item-time';
+      const relTime = formatRelativeTime(entry.finished_at);
+      const elapsed = entry.elapsed_seconds != null ? `${entry.elapsed_seconds}s` : '';
+      timeRow.textContent = [relTime, elapsed].filter(Boolean).join(' • ');
+      item.appendChild(timeRow);
+
+      // Source file names
+      if (entry.video_names && entry.video_names.length > 0) {
+        const srcDiv = document.createElement('div');
+        srcDiv.className = 'activity-item-source';
+        srcDiv.textContent = entry.video_names.join(', ');
+        item.appendChild(srcDiv);
+      }
+
+      // Output files with copy buttons
+      if (entry.output_files && entry.output_files.length > 0) {
+        entry.output_files.forEach((filePath) => {
+          const pathRow = document.createElement('div');
+          pathRow.className = 'activity-item-path-row';
+
+          const pathSpan = document.createElement('span');
+          pathSpan.className = 'activity-path-text';
+          pathSpan.textContent = filePath;
+          pathSpan.title = filePath;
+          pathRow.appendChild(pathSpan);
+
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'activity-copy-btn';
+          copyBtn.type = 'button';
+          copyBtn.title = 'Copy path';
+          copyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+          copyBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            copyActivityPath(filePath);
+          });
+          pathRow.appendChild(copyBtn);
+
+          item.appendChild(pathRow);
+        });
+      }
+
+      // Error message for failed jobs
+      if (entry.error_message) {
+        const errDiv = document.createElement('div');
+        errDiv.className = 'activity-item-error';
+        errDiv.textContent = entry.error_message;
+        item.appendChild(errDiv);
+      }
+
+      elems.activityList.appendChild(item);
+    });
+  }
+
+  async function fetchActivity() {
+    try {
+      const resp = await fetch('/api/activity');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const totalUnread = (data.unread || 0) + (state.pendingUpdate ? 1 : 0);
+      if (elems.activityBadge) {
+        if (totalUnread > 0) {
+          elems.activityBadge.textContent = totalUnread > 99 ? '99+' : String(totalUnread);
+          elems.activityBadge.classList.remove('hidden');
+        } else {
+          elems.activityBadge.classList.add('hidden');
+        }
+      }
+      renderActivityList(data.entries || []);
+      if (elems.activityPanel && !elems.activityPanel.classList.contains('hidden') && data.unread > 0) {
+        markActivitySeen();
+      }
+    } catch (e) {
+      console.warn('Failed to fetch activity:', e);
+    }
+  }
+
+  async function markActivitySeen() {
+    try {
+      if (elems.activityBadge) {
+        elems.activityBadge.classList.add('hidden');
+      }
+      await fetch('/api/activity/seen', { method: 'POST' });
+    } catch (e) {
+      console.warn('Failed to mark activity seen:', e);
+    }
+  }
+
+  async function clearActivityHistory() {
+    try {
+      const ok = confirm('Clear all recent activity?');
+      if (!ok) return;
+      await fetch('/api/activity', { method: 'DELETE' });
+      await fetchActivity();
+      showToast('Activity cleared', 'info');
+    } catch (e) {
+      console.warn('Failed to clear activity:', e);
+    }
+  }
+
+  function toggleActivityPanel() {
+    if (!elems.activityPanel) return;
+    if (elems.activityPanel.classList.contains('hidden')) {
+      openActivityPanel();
+    } else {
+      closeActivityPanel();
+    }
+  }
+
+  function openActivityPanel() {
+    if (!elems.activityPanel) return;
+    elems.activityPanel.classList.remove('hidden');
+    if (elems.btnActivity) elems.btnActivity.setAttribute('aria-expanded', 'true');
+    markActivitySeen();
+  }
+
+  function closeActivityPanel() {
+    if (!elems.activityPanel) return;
+    elems.activityPanel.classList.add('hidden');
+    if (elems.btnActivity) elems.btnActivity.setAttribute('aria-expanded', 'false');
+  }
+
+  async function checkForUpdates(manual = false) {
+    const isDesktop = Boolean(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function');
+    if (!isDesktop) {
+      if (manual) showToast('Updates are only available in the desktop app', 'info');
+      return;
+    }
+    if (manual) showToast('Checking for updates...', 'info');
+    try {
+      const update = await tauriInvoke('plugin:updater|check');
+      if (update && update.version) {
+        state.pendingUpdate = update;
+        sendDesktopNotification('Clarity — Update Available', `Version ${update.version} is available! Open Recent Activity to install.`);
+        fetchActivity();
+        if (manual) showToast(`Update available: v${update.version}`, 'info');
+      } else {
+        state.pendingUpdate = null;
+        if (manual) showToast('Clarity is up to date!', 'info');
+      }
+    } catch (err) {
+      console.warn('Update check failed:', err);
+      if (manual) showToast(`Failed to check for updates: ${err.message || err}`, 'error');
+    }
+  }
+
+  async function installUpdate() {
+    try {
+      const resp = await fetch('/api/jobs/status');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.active || state.activeJob) {
+          showToast('Please wait for the current render job to finish before updating.', 'error');
+          return;
+        }
+      }
+    } catch (e) {
+      // Proceed if endpoint unreachable
+    }
+    showToast('Downloading and installing update...', 'info');
+    try {
+      await tauriInvoke('plugin:updater|download_and_install');
+    } catch (err) {
+      showToast(`Update installation failed: ${err.message || err}`, 'error');
+    }
+  }
+
+  function initActivityPanel() {
+    if (elems.btnActivity) {
+      elems.btnActivity.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        toggleActivityPanel();
+      });
+    }
+    if (elems.btnActivityClear) {
+      elems.btnActivityClear.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        clearActivityHistory();
+      });
+    }
+    if (elems.btnCheckUpdates) {
+      elems.btnCheckUpdates.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        checkForUpdates(true);
+      });
+    }
+    document.addEventListener('click', (ev) => {
+      if (!elems.activityPanel || elems.activityPanel.classList.contains('hidden')) return;
+      if (!elems.activityPanel.contains(ev.target) && !elems.btnActivity.contains(ev.target)) {
+        closeActivityPanel();
+      }
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && elems.activityPanel && !elems.activityPanel.classList.contains('hidden')) {
+        closeActivityPanel();
+      }
+    });
+  }
+
   // Initialize
   initDesktopBridge();
   loadSystemInfo();
   loadVideos();
+  initActivityPanel();
+  fetchActivity();
   connectWebSocket();
+  setTimeout(() => { checkForUpdates(false); }, 15000);
 });

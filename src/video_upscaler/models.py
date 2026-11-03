@@ -35,6 +35,26 @@ PROFILES: dict[str, tuple[str, str]] = {
         "up2x-latest-conservative.pth",
         "2x with minimal processing — preserves the original art style and avoids AI artifacts",
     ),
+    "1x_Balanced": (
+        "up2x-latest-denoise2x.pth",
+        "1x with moderate denoising at original resolution",
+    ),
+    "1x_Clean": (
+        "up2x-latest-no-denoise.pth",
+        "1x pure upscale without denoising at original resolution",
+    ),
+    "1x_Light": (
+        "up2x-latest-denoise1x.pth",
+        "1x with light denoising at original resolution",
+    ),
+    "1x_Deep": (
+        "up2x-latest-denoise3x.pth",
+        "1x with strong denoising at original resolution",
+    ),
+    "1x_Faithful": (
+        "up2x-latest-conservative.pth",
+        "1x with minimal processing at original resolution",
+    ),
     "3x_Clean": (
         "up3x-latest-no-denoise.pth",
         "3x pure upscale without denoising — preserves original grain and texture exactly",
@@ -93,6 +113,13 @@ def scale_for_model(model_name: str) -> int:
         if f"up{scale}x" in model_name:
             return scale
     raise ValueError(f"Could not determine scale from model name: {model_name}")
+
+
+def output_scale_for_profile(profile: str) -> int:
+    """Return the output upscale factor for a profile (e.g. 1 for '1x_Balanced', 2 for '2x_Balanced')."""
+    if profile.startswith("1x_"):
+        return 1
+    return scale_for_model(model_for_profile(profile))
 
 
 def ncnn_args_for_profile(profile: str) -> dict:

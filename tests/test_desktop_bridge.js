@@ -246,10 +246,9 @@ describe('Render queue lifecycle (Phase C)', () => {
     assert.ok(region.includes('handleJobCancelled'), 'cancelled branch must use the shared handler');
   });
 
-  test('completed clears the queue selection (failed keeps it)', () => {
+  test('completed keeps the queue selection', () => {
     const fnSrc = extractFn('function handleJobCompleted(');
-    assert.ok(fnSrc.includes('state.selectedVideos = []'), 'completed must clear selectedVideos');
-    assert.ok(fnSrc.includes('updateQueueUI'), 'completed must re-render the queue UI');
+    assert.strictEqual(fnSrc.includes('state.selectedVideos = []'), false, 'completed must keep selectedVideos');
     assert.ok(src.includes('handleJobCompleted(data.job)'), 'ws branch must delegate to the shared handler');
   });
 
@@ -458,7 +457,8 @@ describe('Status poll reconciler (F4)', () => {
       'function updateQueueUI() { calls.queueUpdates++; }',
       'function sendDesktopNotification(title, body) { calls.notifications.push({ title: title, body: body }); }',
       'function loadOutputVideos(silent) { calls.outputLoads++; }',
-      'function populateMaResultWindows(files) { calls.maResults++; }'
+      'function populateMaResultWindows(files) { calls.maResults++; }',
+      'function fetchActivity() { calls.activityFetches = (calls.activityFetches || 0) + 1; }'
     ].join('\n');
     const fns = [
       extractFn('function resetRenderUI()'),
@@ -541,7 +541,7 @@ describe('Status poll reconciler (F4)', () => {
     assert.strictEqual(h.api.getTimer(), null, 'poller must stop after reconcile');
     assert.strictEqual(h.api.calls.toasts.length, 1, 'shared terminal path must run once');
     assert.strictEqual(h.api.calls.toasts[0].kind, 'success');
-    assert.deepStrictEqual(h.state.selectedVideos, [], 'reconcile must clear the queue like WS completion');
+    assert.deepStrictEqual(h.state.selectedVideos, [{ name: 'a.mp4' }], 'reconcile must keep the queue like WS completion');
     assert.ok(h.elems.renderCompletedBanner.removed.includes('hidden'), 'completion banner must show');
 
     const toastCount = h.api.calls.toasts.length;
@@ -583,5 +583,193 @@ describe('Status poll reconciler (F4)', () => {
     assert.ok(pollSrc.includes('/api/jobs/status'), 'poller must fetch the status endpoint');
     assert.ok(pollSrc.includes('STATUS_POLL_GRACE_MS'), 'poller must honor the grace window');
     assert.ok(pollSrc.includes('handleJobCompleted'), 'poller must reuse the shared terminal path');
+  });
+});
+
+
+describe('1x scale UI', () => {
+  test('index.html contains 1x scale button and explanatory hint', () => {
+    const htmlPath = path.resolve(__dirname, '../src/video_upscaler/web/static/index.html');
+    const html = fs.readFileSync(htmlPath, 'utf8');
+    assert.ok(html.includes('data-scale="1"'), 'index.html must have 1x scale button');
+    assert.ok(html.includes('1x keeps the original resolution'), 'index.html must contain 1x hint');
+  });
+
+  test('selecting scale sets profile to Nx_Balanced', () => {
+    const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
+    const appJs = fs.readFileSync(appJsPath, 'utf8');
+    assert.ok(appJs.includes("state.upscaleConfig.profile = `${scale}x_Balanced`"));
+  });
+});
+
+describe('Recent Activity Panel UI', () => {
+  const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
+  const appJs = fs.readFileSync(appJsPath, 'utf8');
+  const htmlPath = path.resolve(__dirname, '../src/video_upscaler/web/static/index.html');
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  const cssPath = path.resolve(__dirname, '../src/video_upscaler/web/static/css/app.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  test('index.html contains activity button, badge, and dropdown container', () => {
+    assert.ok(html.includes('id="btn-activity"'), 'index.html must have btn-activity');
+    assert.ok(html.includes('id="activity-badge"'), 'index.html must have activity-badge');
+    assert.ok(html.includes('id="activity-panel"'), 'index.html must have activity-panel');
+    assert.ok(html.includes('id="activity-list"'), 'index.html must have activity-list');
+    assert.ok(html.includes('id="btn-activity-clear"'), 'index.html must have btn-activity-clear');
+    const bellPos = html.indexOf('id="btn-activity"');
+    const badgePos = html.indexOf('id="system-info-badge"');
+    assert.ok(bellPos < badgePos, 'activity button must sit left of system-info-badge');
+  });
+
+  test('app.css contains activity dropdown and item styling', () => {
+    assert.ok(css.includes('.btn-header-activity'), 'must style btn-header-activity');
+    assert.ok(css.includes('.activity-badge'), 'must style activity-badge');
+    assert.ok(css.includes('.activity-panel'), 'must style activity-panel');
+    assert.ok(css.includes('.activity-item'), 'must style activity-item');
+    assert.ok(css.includes('.activity-copy-btn'), 'must style activity-copy-btn');
+  });
+
+  test('app.js defines activity panel lifecycle functions', () => {
+    assert.ok(appJs.includes('function fetchActivity('));
+    assert.ok(appJs.includes('function renderActivityList('));
+    assert.ok(appJs.includes('function markActivitySeen('));
+    assert.ok(appJs.includes('function clearActivityHistory('));
+    assert.ok(appJs.includes('function copyActivityPath('));
+    assert.ok(appJs.includes('function openActivityPanel('));
+    assert.ok(appJs.includes('function closeActivityPanel('));
+  });
+
+  test('copyActivityPath prefers navigator.clipboard and falls back gracefully', async () => {
+    let copiedText = null;
+    let toastMsg = null;
+    const mockNavigator = {
+      clipboard: {
+        writeText: async (t) => {
+          copiedText = t;
+        }
+      }
+    };
+    const showToast = (msg) => { toastMsg = msg; };
+
+    const start = appJs.indexOf('async function copyActivityPath(');
+    const end = appJs.indexOf('\n  }', start);
+    const fnSrc = appJs.slice(start, end + 4);
+
+    const copyFn = new Function('navigator', 'showToast', `
+      ${fnSrc}
+      return copyActivityPath;
+    `)(mockNavigator, showToast);
+
+    await copyFn('/output/test_video_1x.mp4');
+    assert.strictEqual(copiedText, '/output/test_video_1x.mp4');
+    assert.strictEqual(toastMsg, 'Path copied to clipboard!');
+  });
+});
+
+describe('Desktop Auto Update UI & Bridge', () => {
+  const appJsPath = path.resolve(__dirname, '../src/video_upscaler/web/static/js/app.js');
+  const appJs = fs.readFileSync(appJsPath, 'utf8');
+  const tauriConfPath = path.resolve(__dirname, '../src-tauri/tauri.conf.json');
+  const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+  const capPath = path.resolve(__dirname, '../src-tauri/capabilities/local-backend.json');
+  const cap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
+  const hooksPath = path.resolve(__dirname, '../src-tauri/hooks.nsh');
+  const hooks = fs.readFileSync(hooksPath, 'utf8');
+
+  test('tauri.conf.json configures updater endpoint, pubkey, and artifacts', () => {
+    assert.strictEqual(tauriConf.bundle.createUpdaterArtifacts, true);
+    assert.ok(tauriConf.plugins && tauriConf.plugins.updater, 'updater plugin must be configured');
+    assert.ok(tauriConf.plugins.updater.pubkey, 'must have pubkey');
+    assert.ok(tauriConf.plugins.updater.endpoints.some((e) => e.includes('Rik-rut/Clarity/releases/latest/download/latest.json')));
+    assert.strictEqual(tauriConf.plugins.updater.windows.installMode, 'passive');
+  });
+
+  test('capabilities and hooks configure updater permissions and update mode', () => {
+    assert.ok(cap.permissions.includes('updater:default'), 'local-backend must include updater:default');
+    assert.ok(hooks.includes('$UpdateMode = 1'), 'hooks.nsh must branch on $UpdateMode');
+    assert.ok(hooks.includes('clarity_trt_upd_no'), 'hooks.nsh must skip TensorRT dialog on update');
+  });
+
+  test('app.js defines update functions and check update button', () => {
+    assert.ok(appJs.includes('async function checkForUpdates('));
+    assert.ok(appJs.includes('async function installUpdate('));
+    assert.ok(appJs.includes("btnCheckUpdates: document.getElementById('btn-check-updates')"));
+  });
+
+  test('checkForUpdates respects desktop guard and handles found/none/error cases', async () => {
+    let notified = [];
+    let toasts = [];
+    let ipcCommands = [];
+
+    const mockState = { pendingUpdate: null, activeJob: null };
+    const mockShowToast = (msg, type) => { toasts.push({ msg, type }); };
+    const mockSendNotification = (title, body) => { notified.push({ title, body }); };
+    const mockFetchActivity = () => {};
+
+    // 1. Non-desktop environment: silent on auto, toasts on manual
+    let mockWindow = {};
+    const checkFnNonDesktop = new Function(
+      'window', 'state', 'showToast', 'sendDesktopNotification', 'fetchActivity', 'elems',
+      `
+      ${appJs.slice(appJs.indexOf('async function checkForUpdates('), appJs.indexOf('\n  }', appJs.indexOf('async function checkForUpdates(')) + 4)}
+      return checkForUpdates;
+      `
+    )(mockWindow, mockState, mockShowToast, mockSendNotification, mockFetchActivity, {});
+
+    await checkFnNonDesktop(false);
+    assert.strictEqual(toasts.length, 0, 'auto check outside desktop must be completely silent');
+    await checkFnNonDesktop(true);
+    assert.ok(toasts.some((t) => t.msg.includes('only available in the desktop app')));
+
+    // 2. Desktop environment with update available
+    toasts = [];
+    mockWindow = {
+      __TAURI__: {
+        core: {
+          invoke: async (cmd) => {
+            ipcCommands.push(cmd);
+            if (cmd === 'plugin:updater|check') {
+              return { version: '0.2.0', body: 'New features!' };
+            }
+            return null;
+          }
+        }
+      }
+    };
+    const tauriInvoke = (cmd, args) => mockWindow.__TAURI__.core.invoke(cmd, args);
+
+    const checkFnDesktop = new Function(
+      'window', 'state', 'showToast', 'sendDesktopNotification', 'fetchActivity', 'elems', 'tauriInvoke',
+      `
+      ${appJs.slice(appJs.indexOf('async function checkForUpdates('), appJs.indexOf('\n  }', appJs.indexOf('async function checkForUpdates(')) + 4)}
+      return checkForUpdates;
+      `
+    )(mockWindow, mockState, mockShowToast, mockSendNotification, mockFetchActivity, {}, tauriInvoke);
+
+    await checkFnDesktop(false);
+    assert.strictEqual(mockState.pendingUpdate.version, '0.2.0');
+    assert.ok(notified.some((n) => n.title.includes('Update Available')));
+    assert.ok(ipcCommands.includes('plugin:updater|check'));
+  });
+
+  test('installUpdate refuses while render job is running', async () => {
+    let installed = false;
+    let toasts = [];
+    const mockState = { activeJob: { job_id: 'j1' } };
+    const mockShowToast = (msg, type) => { toasts.push({ msg, type }); };
+    const mockFetch = async () => ({ ok: true, json: async () => ({ active: true }) });
+    const tauriInvoke = async () => { installed = true; };
+
+    const installFn = new Function(
+      'state', 'showToast', 'fetch', 'tauriInvoke',
+      `
+      ${appJs.slice(appJs.indexOf('async function installUpdate('), appJs.indexOf('\n  }', appJs.indexOf('async function installUpdate(')) + 4)}
+      return installUpdate;
+      `
+    )(mockState, mockShowToast, mockFetch, tauriInvoke);
+
+    await installFn();
+    assert.strictEqual(installed, false, 'must not install when job is active');
+    assert.ok(toasts.some((t) => t.msg.includes('Please wait for the current render job')));
   });
 });

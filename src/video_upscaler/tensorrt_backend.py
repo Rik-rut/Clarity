@@ -306,7 +306,7 @@ def build_engine(
     scale: int,
     *,
     precision: str = "fp16",
-    workspace_gib: float = 1.0,
+    workspace_gib: float = 4.0,
 ) -> Path:
     """Build (or reuse) the cached TRT engine for a model; return its path."""
     prepare_env()

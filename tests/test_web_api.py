@@ -22,6 +22,11 @@ def test_system_info_endpoint():
     assert "slow_mo_models" in data
     assert "dedup_models" in data
     assert len(data["profiles"]) > 0
+    one_x = [p for p in data["profiles"] if p["scale"] == 1]
+    assert len(one_x) == 5
+    assert {p["name"] for p in one_x} == {
+        "1x_Balanced", "1x_Clean", "1x_Light", "1x_Deep", "1x_Faithful"
+    }
 
 
 def test_system_info_cold_cache(monkeypatch):
@@ -284,3 +289,50 @@ def test_dedup_preload_rejects_unknown_model():
     assert resp.status_code == 400
 
 
+
+
+def test_1x_upscale_job_end_to_end_and_output_scanned(tmp_path):
+    import time
+    app = create_app()
+    client = TestClient(app)
+
+    in_dir = tmp_path / "input"
+    in_dir.mkdir()
+    out_dir = tmp_path / "output"
+    out_dir.mkdir()
+
+    vid = in_dir / "sample.mkv"
+    vid.write_bytes(b"dummy_video")
+
+    expected_out = out_dir / "sample_1x.mp4"
+
+    def fake_process_videos(videos, profile, progress_cb, stage_cb=None):
+        assert profile == "1x_Balanced"
+        progress_cb(1, 1, 100)
+        expected_out.write_bytes(b"enhanced_mp4")
+        return {"success": [expected_out], "failed": [], "times": [0.5]}
+
+    with patch("video_upscaler.web.jobs.process_videos", side_effect=fake_process_videos):
+        resp = client.post(
+            "/api/jobs/start",
+            json={
+                "action": "Upscale",
+                "video_names": ["sample.mkv"],
+                "input_dir": str(in_dir),
+                "output_dir": str(out_dir),
+                "params": {"profile": "1x_Balanced"},
+            },
+        )
+        assert resp.status_code == 200
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            st = client.get("/api/jobs/status").json()
+            if not st.get("active"):
+                break
+            time.sleep(0.05)
+
+        scan_resp = client.get(f"/api/videos/scanned?folder={out_dir.resolve()}")
+        assert scan_resp.status_code == 200
+        vids = scan_resp.json().get("videos", [])
+        assert any(v["name"] == "sample_1x.mp4" for v in vids)

@@ -10,6 +10,7 @@
   "permissions": [
     "core:event:allow-listen",
     "notification:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default"
   ]
 }

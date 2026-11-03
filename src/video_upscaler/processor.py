@@ -16,15 +16,16 @@ from video_upscaler.ffmpeg import decode_frames, encode_video, probe
 from video_upscaler.models import (
     model_for_profile,
     scale_for_model,
+    output_scale_for_profile,
     niters_for_factor,
 )
 from video_upscaler.amt_scheduler import AMTFrameScheduler
 
 def _unique_tagged_path(output_dir: Path, original_name: str, tag: str) -> Path:
-    """Build ``<stem>_<tag><ext>``, appending ``_N`` before the extension
+    """Build ``<stem>_<tag>.mp4``, appending ``_N`` before the extension
     when the target exists (never overwrites)."""
     stem = Path(original_name).stem
-    suffix = Path(original_name).suffix
+    suffix = ".mp4"
     candidate = output_dir / f"{stem}_{tag}{suffix}"
     counter = 1
     while candidate.exists():
@@ -34,8 +35,8 @@ def _unique_tagged_path(output_dir: Path, original_name: str, tag: str) -> Path:
 
 
 def upscale_output_tag(profile: str) -> str:
-    """Return the filename tag for a profile, e.g. ``2x``."""
-    return f"{scale_for_model(model_for_profile(profile))}x"
+    """Return the filename tag for a profile, e.g. ``1x`` or ``2x``."""
+    return f"{output_scale_for_profile(profile)}x"
 
 
 def slowed_output_tag(factor: int, model_key: str) -> str:
@@ -219,11 +220,11 @@ def process_videos(
         started = time.perf_counter()
         try:
             info = probe(video)
-            out_width = info["width"] * scale
-            out_height = info["height"] * scale
-            if out_width > MAX_OUTPUT_WIDTH_WARNING:
+            infer_width = info["width"] * scale
+            infer_height = info["height"] * scale
+            if infer_width > MAX_OUTPUT_WIDTH_WARNING:
                 print(
-                    f"Warning: output width {out_width}px exceeds the "
+                    f"Warning: output width {infer_width}px exceeds the "
                     f"{MAX_OUTPUT_WIDTH_WARNING}px threshold — processing may "
                     "be very slow or produce an unusable file."
                 )
@@ -240,16 +241,21 @@ def process_videos(
                 file_count,
                 progress_cb,
             )
+            out_size = None
+            if output_scale_for_profile(profile) == 1:
+                out_size = ((info["width"] // 2) * 2, (info["height"] // 2) * 2)
             encode_video(
                 enhanced,
-                out_width,
-                out_height,
+                infer_width,
+                infer_height,
                 info["fps"],
                 video,
                 out_path,
                 info["has_audio"],
                 rotation=info["rotation"],
                 use_nvenc=config.USE_NVENC,
+                audio_codec=info.get("audio_codec"),
+                out_size=out_size,
             )
             progress_cb(index, file_count, 100)
             results["success"].append(out_path)
@@ -463,6 +469,7 @@ def process_interpolate(
                 info["has_audio"],
                 rotation=info["rotation"],
                 use_nvenc=config.USE_NVENC,
+                audio_codec=info.get("audio_codec"),
             )
             progress_cb(index, file_count, 100)
             results["success"].append(out_path)

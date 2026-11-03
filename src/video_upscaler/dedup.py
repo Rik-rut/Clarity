@@ -481,7 +481,7 @@ def run_dedup_infer(
             progress_cb(min(max(fraction, 0.0), 1.0))
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        temp_out = Path(tmpdir) / video_in.name
+        temp_out = (Path(tmpdir) / video_in.name).with_suffix(".mp4")
         worker.run(
             video=str(video_in),
             output=str(temp_out.resolve()),

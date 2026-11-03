@@ -30,7 +30,7 @@ Clarity provides four powerful AI tools in one unified studio:
 
 | Mode | What It Does | Best For |
 | :--- | :--- | :--- |
-| 🔍 **Upscale** | Increases video resolution (**2x, 3x, or 4x**) up to crisp 4K while removing blur, compression artifacts, and noise. | Anime, animations, retro cartoons, and vintage clips. |
+| 🔍 **Upscale** | Enhances video clarity (**1x, 2x, 3x, or 4x**) up to crisp 4K while removing blur, compression artifacts, and noise (1x retains the original resolution while supersampling and denoising). | Anime, animations, retro cartoons, and vintage clips. |
 | ⏳ **Slow-Motion** | Generates brand-new AI intermediate frames to create ultra-smooth **2x, 4x, or 8x** slow-motion. | Action shots, sports replays, smooth motion clips. |
 | 🎞️ **Interpolate** | Replaces duplicate/choppy frames with newly synthesized motion (**2x, 4x, or 8x** fps multiplier). | Smoothing 24fps anime to silky 48fps or 60fps+ fluid playback. |
 | 🎭 **Easy Mask** | 1-click subject extraction and background separation. Outputs a **green-screen composite**, an **alpha matte**, and optional **transparent video**. | Background replacement, VFX compositing, rotoscoping subjects. |
@@ -46,7 +46,7 @@ Clarity provides four powerful AI tools in one unified studio:
    - You can also paste videos directly into the `input/` folder.
 2. **Choose Your AI Action**:
    - Click **Upscale**, **Slow-motion**, **Interpolate**, or **Easy Mask** in the top navigation bar.
-   - Choose your scale or speed multiplier (`2x`, `3x`, `4x`, `8x`).
+   - Choose your scale or speed multiplier (`1x`, `2x`, `3x`, `4x`, `8x`).
    - Pick a model card that suits your video (e.g. *Balanced* for everyday videos, *Deep* for noisy clips).
 3. **Compare & Inspect**:
    - Preview original and enhanced videos side-by-side.
@@ -58,8 +58,12 @@ Clarity provides four powerful AI tools in one unified studio:
    - Click the **Render Queue** button at the bottom left to inspect queued jobs.
 5. **Hit Render**:
    - Click **Render Video**. A live progress bar will show the render stage, percent, elapsed time, and ETA.
-   - When finished, your output video is saved to the `output/` folder and loaded into the player for instant review!
-6. **Reset App Anytime**:
+   - When finished, your output video is saved as an `.mp4` file in the `output/` folder and loaded into the player for instant review! (Transparent Easy Mask exports remain `.mov` with ProRes 4444).
+6. **Recent Activity & Saved Paths**:
+   - Click the **Bell (🔔)** icon in the top header to view recent jobs.
+   - Displays the status (completed, failed, cancelled), elapsed time, error reasons, and full output file paths with one-click copy buttons.
+   - Automatically stores the most recent 20 jobs in `activity.json` inside your app data directory so history persists across app restarts.
+7. **Reset App Anytime**:
    - Click the **Reset App** button at the top right to instantly purge GPU VRAM caches and restore the studio to its pristine initial state.
 
 ---
@@ -156,6 +160,14 @@ Only the first time you use a specific AI model (Clarity will automatically down
 
 - Click the **3 dots (`...`)** next to any video in the Input or Output list to **Rename** or **Delete** it.
 - Click the **Clear Videos** button at the bottom of the list to remove all videos in that folder at once.
+</details>
+
+<details>
+<summary><b>How do desktop updates work?</b></summary>
+
+Clarity desktop builds automatically check for updates from [GitHub Releases](https://github.com/Rik-rut/Clarity/releases). When a new version is published, you will receive a notification and an update card in the Recent Activity panel. Updates always ask before installing, and upgrading preserves your existing models, settings, and activity history.
+
+> 💡 *Note: The first updater-enabled build must be downloaded and installed manually; subsequent releases will notify you directly inside the app.*
 </details>
 
 <details>

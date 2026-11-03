@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from fastapi import WebSocket
 
 from video_upscaler import config
+from video_upscaler.web import activity
 from video_upscaler.processor import (
     format_duration,
     process_videos,
@@ -447,6 +448,10 @@ class JobManager:
             with self._lock:
                 if self.active_job_id == job_id:
                     self.active_job_id = None
+            try:
+                activity.record(job)
+            except Exception as act_exc:
+                logger.error("Failed to record activity for job %s: %s", job_id, act_exc)
             self.broadcast_sync({"type": "job_completed", "job": job.to_dict()})
 
 

@@ -15,6 +15,7 @@ wheels/
 Thumbs.db
 
 # Runtime directories (created automatically at startup)
+activity.json
 input/*
 output/*
 !input/.gitkeep
@@ -44,6 +45,7 @@ src/video_upscaler/multipass_dedup/weights/
 # Model hub staging directory (upload to HuggingFace, never commit)
 CLARITY_MODELS/
 screenshots/*
+scratch/
 
 # Internal dev workflow files (kept locally, not shipped)
 .superpowers/
@@ -60,8 +62,6 @@ AGENTS.md
 MULTIPASSDEDUP_INTEGRATION_PLAN.md
 MATANYONE2_CLARITY_IMPLEMENTATION.md
 
-# Internal dev docs kept only on disk
-docs/*
 .cache/
 
 # Tauri desktop application

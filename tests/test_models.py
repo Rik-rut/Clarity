@@ -14,6 +14,7 @@ from video_upscaler.models import (
 )
 
 PROFILE_NAMES = {
+    "1x_Clean", "1x_Light", "1x_Balanced", "1x_Deep", "1x_Faithful",
     "2x_Clean", "2x_Light", "2x_Balanced", "2x_Deep", "2x_Faithful",
     "3x_Clean", "3x_Deep", "3x_Faithful",
     "4x_Clean", "4x_Deep", "4x_Faithful",

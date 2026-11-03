@@ -19,6 +19,7 @@ _FRAME_CHUNK = 1 << 20  # bounded 1 MiB pipe reads
 
 _NVENC_AVAILABLE: bool | None = None
 _PRORES_AVAILABLE: bool | None = None
+MP4_COMPATIBLE_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3"}
 
 
 def prores_available() -> bool:
@@ -158,6 +159,7 @@ def probe(path: Path) -> dict:
     if fps <= 0:
         fps = 30.0
 
+    has_audio, audio_codec = _probe_audio(ffprobe, path)
     rotation = 0
     for side in stream.get("side_data_list") or []:
         if "rotation" in side:
@@ -169,14 +171,15 @@ def probe(path: Path) -> dict:
         "height": int(stream.get("height") or 0),
         "fps": fps,
         "codec_name": stream.get("codec_name"),
-        "has_audio": _probe_audio(ffprobe, path),
+        "has_audio": has_audio,
+        "audio_codec": audio_codec,
         "duration": float(fmt.get("duration") or 0.0),
         "rotation": int(rotation),
     }
 
 
-def _probe_audio(ffprobe: str, path: Path) -> bool:
-    """Return True if the file contains at least one audio stream."""
+def _probe_audio(ffprobe: str, path: Path) -> tuple[bool, str | None]:
+    """Return (has_audio, audio_codec) for the first audio stream."""
     command = [
         ffprobe,
         "-v",
@@ -184,16 +187,20 @@ def _probe_audio(ffprobe: str, path: Path) -> bool:
         "-select_streams",
         "a",
         "-show_entries",
-        "stream=codec_type",
+        "stream=codec_name,codec_type",
         "-of",
         "json",
         str(path),
     ]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
-        return False
+        return False, None
     data = json.loads(result.stdout or "{}")
-    return bool(data.get("streams"))
+    streams = data.get("streams") or []
+    if streams:
+        codec = streams[0].get("codec_name")
+        return True, (codec.lower() if codec else None)
+    return False, None
 
 
 def decode_frames(path: Path) -> Generator[bytes, None, None]:
@@ -254,6 +261,8 @@ def encode_video(
     use_nvenc: bool = True,
     timing: dict[str, float] | None = None,
     alpha: bool = False,
+    audio_codec: str | None = None,
+    out_size: tuple[int, int] | None = None,
 ) -> None:
     """Encode enhanced frames to ``out_path`` with audio copy.
 
@@ -300,6 +309,11 @@ def encode_video(
     command += ["-map", "0:v:0"]
     if use_audio:
         command += ["-map", "1:a:0?"]
+    if out_size is not None:
+        target_w = (out_size[0] // 2) * 2
+        target_h = (out_size[1] // 2) * 2
+        if (target_w, target_h) != (frame_w, frame_h):
+            command += ["-vf", f"scale={target_w}:{target_h}:flags=lanczos"]
     if alpha:
         # Transparent ProRes 4444: yuva444p10le keeps full-res alpha and is
         # read natively by every video editor. Audio stays stream-copied —
@@ -344,7 +358,18 @@ def encode_video(
             "yuv420p",
         ]
     if use_audio:
-        command += ["-c:a", "copy"]
+        if alpha:
+            command += ["-c:a", "copy"]
+        else:
+            codec = audio_codec
+            if codec is None:
+                ffprobe = _ffprobe_path()
+                if ffprobe:
+                    _, codec = _probe_audio(ffprobe, src_path)
+            if codec and codec.lower() in MP4_COMPATIBLE_AUDIO_CODECS:
+                command += ["-c:a", "copy"]
+            else:
+                command += ["-c:a", "aac", "-b:a", "320k"]
     if rotation:
         command += ["-metadata:s:v:0", f"rotate={rotation}"]
     command += ["-movflags", "+faststart", str(out_path)]

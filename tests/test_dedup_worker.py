@@ -144,3 +144,35 @@ def test_process_dedup_maps_worker_progress_to_file_percent(tmp_path, monkeypatc
     assert results["success"]
     assert (1, 1, 50) in updates
     assert updates[-1] == (1, 1, 100)
+
+
+def test_run_dedup_infer_mkv_input_outputs_mp4(monkeypatch, tmp_path):
+    from pathlib import Path
+    video_in = tmp_path / "video.mkv"
+    video_in.write_bytes(b"dummy_mkv")
+    video_out = tmp_path / "video_dedup2x_gmfss.mp4"
+
+    monkeypatch.setattr(dedup_mod, "ensure_dedup_weights", lambda *a, **kw: None)
+
+    class MockWorker:
+        def is_loaded(self, *a, **kw):
+            return True
+
+        def run(self, **kwargs):
+            out_file = Path(kwargs["output"])
+            assert out_file.suffix == ".mp4"
+            out_file.write_bytes(b"rendered_mp4")
+
+    monkeypatch.setattr(dedup_mod, "_get_worker", lambda: MockWorker())
+
+    dedup_mod.run_dedup_infer(
+        video_in=video_in,
+        video_out=video_out,
+        model_type="gmfss",
+        npass=0,
+        factor=2,
+    )
+
+    assert video_out.exists()
+    assert video_out.suffix == ".mp4"
+    assert video_out.read_bytes() == b"rendered_mp4"

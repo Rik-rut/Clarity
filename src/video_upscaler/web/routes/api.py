@@ -37,9 +37,11 @@ from video_upscaler.models import (
     description_for_interp_model,
     description_for_profile,
     scale_for_model,
+    output_scale_for_profile,
 )
 from video_upscaler.processor import format_duration
 from video_upscaler.scanner import scan_videos
+from video_upscaler.web import activity
 from video_upscaler.web.jobs import job_manager
 from video_upscaler.web.stream import stream_video_file
 
@@ -115,7 +117,7 @@ def get_system_info() -> Dict[str, Any]:
     profiles = [
         {
             "name": name,
-            "scale": scale_for_model(m_name),
+            "scale": output_scale_for_profile(name),
             "model_file": m_name,
             "description": desc,
         }
@@ -663,6 +665,23 @@ def stream_video(request: Request, path: str = Query(...)) -> Any:
     ):
         raise HTTPException(status_code=403, detail="Path escapes the data directory")
     return stream_video_file(vid_path, request)
+
+@router.get("/activity")
+def get_activity() -> Dict[str, Any]:
+    return activity.get_activity()
+
+
+@router.post("/activity/seen")
+def mark_activity_seen() -> Dict[str, Any]:
+    last_seen = activity.mark_seen()
+    return {"ok": True, "last_seen_seq": last_seen}
+
+
+@router.delete("/activity")
+def clear_activity() -> Dict[str, Any]:
+    activity.clear()
+    return {"ok": True}
+
 
 @router.websocket("/ws/progress")
 async def websocket_progress(websocket: WebSocket) -> None:

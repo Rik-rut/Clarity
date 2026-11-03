@@ -126,7 +126,7 @@ def test_output_fps_preserved_and_duration_scales_with_factor(
     ))
     monkeypatch.setattr(processor.config, "OUTPUT_DIR", tmp_path)
 
-    def fake_encode(frames, frame_w, frame_h, fps, src_path, out_path, use_audio, rotation=0, use_nvenc=True):
+    def fake_encode(frames, frame_w, frame_h, fps, src_path, out_path, use_audio, rotation=0, use_nvenc=True, **_kwargs):
         captured["fps"] = fps
         captured["count"] = sum(1 for _ in frames)
         captured["size"] = (frame_w, frame_h)
@@ -180,7 +180,7 @@ def test_audio_and_rotation_passthrough_unchanged(
     ))
     monkeypatch.setattr(processor.config, "OUTPUT_DIR", tmp_path)
 
-    def fake_encode(frames, frame_w, frame_h, fps, src_path, out_path, use_audio, rotation=0, use_nvenc=True):
+    def fake_encode(frames, frame_w, frame_h, fps, src_path, out_path, use_audio, rotation=0, use_nvenc=True, **_kwargs):
         captured["use_audio"] = use_audio
         captured["rotation"] = rotation
 

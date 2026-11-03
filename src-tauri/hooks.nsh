@@ -50,6 +50,15 @@ Var TensorrtChoice
   IntCmp $0 0 clarity_nvidia clarity_no_nvidia clarity_no_nvidia
   clarity_nvidia:
     DetailPrint "  NVIDIA GPU detected: $1"
+    ${If} $UpdateMode = 1
+      ; In update mode, keep existing choice without prompting
+      IfFileExists "$DataDir\venv\Lib\site-packages\tensorrt*" 0 clarity_trt_upd_no
+        StrCpy $TensorrtChoice "yes"
+        Goto clarity_no_nvidia
+      clarity_trt_upd_no:
+        StrCpy $TensorrtChoice "no"
+        Goto clarity_no_nvidia
+    ${EndIf}
     IfSilent clarity_trt_silent 0
       MessageBox MB_YESNO|MB_ICONQUESTION "Install TensorRT acceleration for your NVIDIA GPU?$\n$\nInterpolation runs considerably faster. Adds roughly 1-2 GB to this download." IDNO clarity_trt_no
       StrCpy $TensorrtChoice "yes"
