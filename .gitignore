@@ -50,9 +50,11 @@ screenshots/*
 .planning/
 docs/
 .opencode/
+.pi/
+openspec/
 graphify-out/
 revision-ref/*
-.agents/*
+.agents/
 CLARITY.md
 AGENTS.md
 MULTIPASSDEDUP_INTEGRATION_PLAN.md
