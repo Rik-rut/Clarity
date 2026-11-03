@@ -52,7 +52,15 @@ from video_upscaler.desktop.context import (
 )
 from video_upscaler.desktop.progress import ProgressTracker
 
+PYTORCH_CU130_INDEX = "https://download.pytorch.org/whl/cu130"
 PYTORCH_CU126_INDEX = "https://download.pytorch.org/whl/cu126"
+PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+
+PYTORCH_INDEX_URLS = {
+    "cu130": PYTORCH_CU130_INDEX,
+    "cu126": PYTORCH_CU126_INDEX,
+    "cpu": PYTORCH_CPU_INDEX,
+}
 VERIFY_IMPORTS = "torch, video_upscaler, cv2, fastapi"
 _ERROR_TAIL_LINES = 12
 # Windows reports a locked or blocked executable as "Access is denied. (os error 5)".
@@ -322,6 +330,7 @@ def install_dependencies(
     tracker: ProgressTracker,
     torch_variant: str,
     tensorrt: bool = False,
+    reinstall_torch: bool = False,
 ) -> None:
     """Install the project and its dependencies into the provisioned venv."""
     # uv will create an environment for itself if the interpreter is missing;
@@ -335,8 +344,12 @@ def install_dependencies(
         "--python",
         str(context.venv_python),
     ]
-    if torch_variant == "cu126":
-        base += ["--extra-index-url", PYTORCH_CU126_INDEX]
+    if reinstall_torch:
+        base += ["--reinstall-package", "torch", "--reinstall-package", "torchvision"]
+
+    index_url = PYTORCH_INDEX_URLS.get(torch_variant)
+    if index_url:
+        base += ["--extra-index-url", index_url]
 
     tracker.phase("dependencies")
     if tensorrt:
@@ -364,11 +377,20 @@ def install_dependencies(
     )
 
 
-def install_runtime(context: SetupContext, tracker: ProgressTracker, state) -> None:
+def install_runtime(
+    context: SetupContext,
+    tracker: ProgressTracker,
+    state,
+    reinstall_torch: bool = False,
+) -> None:
     """Venv plus dependencies, honouring the TensorRT decision in ``state``."""
     create_venv(context, tracker)
     install_dependencies(
-        context, tracker, state.torch_variant or "cpu", tensorrt=bool(state.tensorrt)
+        context,
+        tracker,
+        state.torch_variant or "cpu",
+        tensorrt=bool(state.tensorrt),
+        reinstall_torch=reinstall_torch,
     )
 
 
@@ -384,8 +406,8 @@ def verify_runtime(
     code = (
         f"import {VERIFY_IMPORTS}\n"
         "import torch\n"
-        "from video_upscaler.backend import detect_backend\n"
-        "print('imports ok', torch.__version__, 'cuda', torch.cuda.is_available())\n"
+        "from video_upscaler.backend import cuda_usable, detect_backend\n"
+        "print('imports ok', torch.__version__, 'cuda', cuda_usable(reset_cache=True))\n"
         "print('backend', detect_backend())\n"
     )
     tracker.line("Verifying the provisioned environment…")

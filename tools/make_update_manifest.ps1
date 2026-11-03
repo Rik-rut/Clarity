@@ -46,9 +46,15 @@ if (-not (Test-Path $BundleDir)) {
     throw "Bundle directory does not exist: $BundleDir"
 }
 
-$installer = Get-ChildItem -Path $BundleDir -Filter "*setup*.exe" | Select-Object -First 1
+$installer = Get-ChildItem -Path $BundleDir -Filter "*$tauriVer*setup*.exe" | Select-Object -First 1
 if (-not $installer) {
-    $installer = Get-ChildItem -Path $BundleDir -Filter "*.exe" | Select-Object -First 1
+    $installer = Get-ChildItem -Path $BundleDir -Filter "*$tauriVer*.exe" | Select-Object -First 1
+}
+if (-not $installer) {
+    $installer = Get-ChildItem -Path $BundleDir -Filter "*setup*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+if (-not $installer) {
+    $installer = Get-ChildItem -Path $BundleDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 if (-not $installer) {
     throw "No installer executable found in $BundleDir. Please build the installer first (e.g. npm run desktop:build)."

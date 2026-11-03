@@ -86,7 +86,9 @@ def _adaptive_amt_scale(height: int, width: int) -> float:
     """Mirror AMT's adaptive-resolution calculation without loading a model."""
     import torch
 
-    if not torch.cuda.is_available():
+    from video_upscaler.backend import cuda_usable
+
+    if not cuda_usable():
         return 1.0
     anchor_resolution = 1024 * 512
     anchor_memory = 1500 * 1024 ** 2
@@ -480,9 +482,9 @@ def download_amt_model(
 
 
 def _torch_cuda_available() -> bool:
-    import torch
+    from video_upscaler.backend import cuda_usable
 
-    return bool(torch.cuda.is_available())
+    return cuda_usable()
 
 
 class AMTInterpEngine:

@@ -111,9 +111,9 @@ def check_dedup_weights(model_type: str) -> str | None:
 def _torch_cuda_available() -> bool:
     """Check CUDA availability without pulling torch into module top level."""
     try:
-        import torch
+        from video_upscaler.backend import cuda_usable
 
-        return bool(torch.cuda.is_available())
+        return cuda_usable()
     except Exception:
         return False
 

@@ -142,7 +142,24 @@ async fn boot_sequence(app: &AppHandle) -> Result<(), String> {
         app,
         &format!("setup verdict: provisioned={provisioned} dev_env={dev_flow}"),
     );
-    if provisioned || dev_flow {
+    if dev_flow {
+        boot_log(app, "setup verdict: dev environment found, launching studio directly");
+        return launch_studio(app).await;
+    }
+
+    if provisioned {
+        let (data_dir, resources_dir) = {
+            let state = app.state::<AppState>();
+            (
+                state.app_data_dir().to_path_buf(),
+                state.resources_dir().to_path_buf(),
+            )
+        };
+        if setup::needs_hardware_repair(&data_dir, &resources_dir).await {
+            report(app, "Hardware change detected. Updating runtime…");
+            boot_log(app, "setup verdict: hardware change detected; reprovisioning runtime");
+            provision(app).await?;
+        }
         boot_log(app, "setup verdict: launching studio directly");
         return launch_studio(app).await;
     }

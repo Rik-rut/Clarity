@@ -615,10 +615,63 @@ fn log_tail_lock(tail: &Arc<Mutex<VecDeque<String>>>) -> Result<std::sync::Mutex
     tail.lock().map_err(|_| ())
 }
 
+/// Checks if the provisioned environment matches the active hardware.
+///
+/// Runs `gpu.py --verify-state <app_data_dir>` using the provisioned venv Python.
+/// Returns `true` if the hardware changed or the CUDA kernel smoke test fails,
+/// indicating that runtime reprovisioning is required.
+pub async fn needs_hardware_repair(app_data_dir: &Path, resources_dir: &Path) -> bool {
+    let python_win = app_data_dir.join("env").join("Scripts").join("python.exe");
+    let python_unix = app_data_dir.join("env").join("bin").join("python");
+    let python = if python_win.is_file() {
+        python_win
+    } else if python_unix.is_file() {
+        python_unix
+    } else {
+        return true;
+    };
+
+    let script = resources_dir
+        .join("src")
+        .join("video_upscaler")
+        .join("desktop")
+        .join("gpu.py");
+
+    let mut cmd = tokio::process::Command::new(&python);
+    if script.is_file() {
+        cmd.arg(&script);
+    } else {
+        cmd.args(["-m", "video_upscaler.desktop.gpu"]);
+    }
+    cmd.args(["--verify-state", &app_data_dir.to_string_lossy()]);
+    cmd.env("PYTHONPATH", resources_dir.join("src"));
+    cmd.env("CLARITY_DATA_DIR", app_data_dir);
+    cmd.env("CLARITY_DESKTOP_MODE", "1");
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(10), cmd.status()).await {
+        Ok(Ok(status)) => !status.success(),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn test_needs_hardware_repair_missing_python() {
+        let temp_dir = std::env::temp_dir().join("clarity_test_hw_repair_missing_py");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+        assert!(needs_hardware_repair(&temp_dir, &temp_dir).await);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_setup_progress_event_serialization() {

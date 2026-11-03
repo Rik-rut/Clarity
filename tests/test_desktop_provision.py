@@ -8,6 +8,8 @@ those two things are what these tests pin down.
 from __future__ import annotations
 
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -132,7 +134,7 @@ def test_a_successful_run_writes_the_marker_last(data_dir: Path, monkeypatch) ->
     state = setup_state.load_state(data_dir)
     assert state.status("verify") == "done"
     assert state.status("complete") == "done"
-    assert state.torch_variant == "cu126"
+    assert state.torch_variant == "cu130"
     assert state.tensorrt is True, "auto means yes when NVIDIA is present"
     assert state.backend == "tensorrt"
     assert not (data_dir / provision.LOCK_NAME).exists(), "the lock must not survive"
@@ -373,3 +375,120 @@ def test_canonical_executable_resolves_the_versionless_alias(tmp_path: Path) -> 
     resolved = canonical_executable(alias / "python.exe")
     assert os.path.normcase(str(resolved)) == os.path.normcase(os.path.realpath(str(target)))
     assert "3.11.15" in resolved.parent.name
+
+
+def test_setup_state_compute_capabilities_roundtrip(data_dir: Path) -> None:
+    state = setup_state.SetupState()
+    state.torch_variant = "cu130"
+    state.gpu_names = ["NVIDIA GeForce RTX 5060 Ti"]
+    state.compute_capabilities = ["12.0"]
+    setup_state.save_state(data_dir, state)
+
+    loaded = setup_state.load_state(data_dir)
+    assert loaded.torch_variant == "cu130"
+    assert loaded.gpu_names == ["NVIDIA GeForce RTX 5060 Ti"]
+    assert loaded.compute_capabilities == ["12.0"]
+    assert loaded.to_dict()["compute_capabilities"] == ["12.0"]
+
+
+def test_install_dependencies_cu130_and_reinstall_torch(base, monkeypatch) -> None:
+    write_fake_env(base.env_dir, base.python_install_dir)
+    calls = _record_commands(monkeypatch)
+
+    runtime.install_dependencies(
+        base,
+        ProgressTracker(),
+        "cu130",
+        tensorrt=False,
+        reinstall_torch=True,
+    )
+
+    cmd = calls[-1]
+    assert runtime.PYTORCH_CU130_INDEX in cmd
+    assert "--reinstall-package" in cmd
+    assert "torch" in cmd
+    assert "torchvision" in cmd
+
+
+def test_install_dependencies_cpu_index(base, monkeypatch) -> None:
+    write_fake_env(base.env_dir, base.python_install_dir)
+    calls = _record_commands(monkeypatch)
+
+    runtime.install_dependencies(base, ProgressTracker(), "cpu", tensorrt=False)
+
+    cmd = calls[-1]
+    assert runtime.PYTORCH_CPU_INDEX in cmd
+
+
+def test_hardware_swap_reprovisions_runtime_and_preserves_models(data_dir: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    # Machine now has RTX 5060 Ti
+    monkeypatch.setattr(
+        provision, "detect_gpu",
+        lambda: GpuInfo(has_nvidia=True, names=["RTX 5060 Ti"], compute_capabilities=["12.0"]),
+    )
+    monkeypatch.setattr(
+        provision.runtime, "install_runtime",
+        lambda *a, **k: calls.append("runtime"),
+    )
+    monkeypatch.setattr(
+        provision.model_steps, "install_models",
+        lambda *a, **k: calls.append("models"),
+    )
+    monkeypatch.setattr(
+        provision.runtime, "verify_runtime",
+        lambda *a, **k: (calls.append("verify"), {"backend": "torch-cuda"})[1],
+    )
+    write_fake_env(data_dir / "env", data_dir / "python")
+
+    # Previous setup on GTX 1060 (cu126)
+    state = setup_state.SetupState()
+    state.torch_variant = "cu126"
+    state.gpu_names = ["GeForce GTX 1060"]
+    state.compute_capabilities = ["6.1"]
+    for step in ("gpu", "runtime", "models", "verify", "complete"):
+        state.mark(step, setup_state.DONE)
+    setup_state.save_state(data_dir, state)
+    setup_state.write_marker(data_dir)
+
+    assert provision.main(["--data-dir", str(data_dir)]) == provision.EXIT_OK
+
+    # Runtime and verify re-ran, but models was preserved!
+    assert "runtime" in calls
+    assert "verify" in calls
+    assert "models" not in calls
+
+    updated = setup_state.load_state(data_dir)
+    assert updated.torch_variant == "cu130"
+    assert updated.gpu_names == ["RTX 5060 Ti"]
+    assert updated.compute_capabilities == ["12.0"]
+    assert setup_state.is_setup_complete(data_dir)
+
+
+def test_cpu_variant_provisions_ncnn_vulkan(data_dir: Path, monkeypatch) -> None:
+    _fake_steps(monkeypatch, backend="torch-cpu")
+    monkeypatch.setattr(provision, "detect_gpu", lambda: GpuInfo(has_nvidia=False))
+    write_fake_env(data_dir / "env", data_dir / "python")
+
+    downloaded = []
+    monkeypatch.setattr("video_upscaler.ncnn.check_ncnn", lambda tool: False)
+    monkeypatch.setattr("video_upscaler.ncnn.download_ncnn", lambda tool: downloaded.append(tool))
+
+    assert provision.main(["--data-dir", str(data_dir)]) == provision.EXIT_OK
+    assert downloaded == ["realcugan"]
+
+
+def test_cpu_variant_ncnn_download_failure_is_non_fatal(data_dir: Path, monkeypatch) -> None:
+    _fake_steps(monkeypatch, backend="torch-cpu")
+    monkeypatch.setattr(provision, "detect_gpu", lambda: GpuInfo(has_nvidia=False))
+    write_fake_env(data_dir / "env", data_dir / "python")
+
+    def broken_download(tool):
+        raise RuntimeError("Network offline")
+
+    monkeypatch.setattr("video_upscaler.ncnn.check_ncnn", lambda tool: False)
+    monkeypatch.setattr("video_upscaler.ncnn.download_ncnn", broken_download)
+
+    # Should still complete successfully using CPU fallback
+    assert provision.main(["--data-dir", str(data_dir)]) == provision.EXIT_OK
+    assert setup_state.is_setup_complete(data_dir)

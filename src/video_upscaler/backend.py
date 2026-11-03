@@ -24,12 +24,62 @@ _LABELS = {
 }
 
 
-def _torch_cuda_available() -> bool:
+_CUDA_USABLE_ATTR = "_clarity_cuda_usable"
+
+
+def cuda_usable(reset_cache: bool = False) -> bool:
+    """Verify that PyTorch can actually execute a kernel on the active CUDA device.
+
+    Catches cases where torch.cuda.is_available() returns True but executing
+    kernels raises cudaErrorNoKernelImageForDevice (e.g. cu130 on Pascal GTX 10-series
+    or cu126 on Blackwell RTX 50-series) or other CUDA runtime errors.
+    Result is cached on the torch module for performance.
+    """
     try:
         import torch
     except ImportError:
         return False
-    return bool(torch.cuda.is_available())
+
+    if not reset_cache and hasattr(torch, _CUDA_USABLE_ATTR):
+        return bool(getattr(torch, _CUDA_USABLE_ATTR))
+
+    if not hasattr(torch, "cuda") or not torch.cuda.is_available():
+        try:
+            setattr(torch, _CUDA_USABLE_ATTR, False)
+        except Exception:
+            pass
+        return False
+
+    try:
+        # 1-element tensor operation forces CUDA driver initialization and
+        # kernel image (sm_XX) compilation/loading on the active device.
+        if hasattr(torch, "zeros"):
+            _ = torch.zeros(1, device="cuda") + 1
+        if hasattr(torch.cuda, "synchronize"):
+            torch.cuda.synchronize()
+        try:
+            setattr(torch, _CUDA_USABLE_ATTR, True)
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        import warnings
+
+        warnings.warn(
+            f"CUDA device detected but kernel execution failed ({exc}). "
+            "Falling back to alternative backend.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        try:
+            setattr(torch, _CUDA_USABLE_ATTR, False)
+        except Exception:
+            pass
+        return False
+
+
+def _torch_cuda_available() -> bool:
+    return cuda_usable()
 
 
 def _torch_mps_available() -> bool:

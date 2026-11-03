@@ -1,187 +1,153 @@
-# ✨ Clarity — AI Video Upscaler & Interpolation Studio
+# Clarity - AI Video Upscaler and Interpolation Studio
 
-> **Transform low-resolution, choppy videos into crisp, high-fps masterpieces with a single click.**
+> Enhance low-resolution or low-frame-rate videos into clear, high-definition videos with a clean, easy-to-use interface.
 
-Clarity is an all-in-one AI video enhancement studio for **Windows, Linux, and macOS**. It comes with a modern **Web Studio interface** where you can drag and drop videos, compare Before & After results side-by-side with interactive zoom and scrubbing, extract subjects with **Easy Mask**, and batch process videos using state-of-the-art AI models.
-
----
-
-## 🚀 Quick Start (1-Click Launch)
-
-No coding, complex installation, or terminal commands needed. Clarity handles everything automatically!
-
-### 1. Download Clarity
-- Click the green **Code** button at the top right of this page and select **Download ZIP**.
-- Extract the ZIP folder anywhere on your computer (e.g., your Desktop or Documents).
-
-### 2. Launch Clarity
-- **Windows:** Double-click **`run.bat`**
-- **Mac / Linux:** Open a terminal in the folder and run `bash run.sh` (or `./run.sh`)
-
-> 💡 *On your very first run, Clarity will automatically configure Python, install required AI libraries, video decoders (FFmpeg), and NVIDIA GPU acceleration (TensorRT). Once finished, your browser will immediately open with the **Clarity Web Studio**!*
-> 
-> *On daily runs, double-clicking `run.bat` launches the studio in under a second.*
+Clarity is an all-in-one video enhancement desktop application for Windows, macOS, and Linux. It provides a visual studio interface where you can drag and drop videos, compare before-and-after results side-by-side, cut out subjects with automatic masking, and process multiple videos at once using modern AI models.
 
 ---
 
-## 🎨 What Can You Do With Clarity?
+## Quick Start
 
-Clarity provides four powerful AI tools in one unified studio:
+### Option 1: Desktop Installer (Windows - Recommended)
 
-| Mode | What It Does | Best For |
+1. Go to the [Releases](https://github.com/Rik-rut/Clarity/releases) page.
+2. Download the latest installer (`Clarity_x.x.x_x64-setup.exe`).
+3. Run the installer and launch Clarity from your Start menu or desktop shortcut.
+
+Automatic updates are built into the desktop app, so future updates can be installed with a single click.
+
+### Option 2: Portable Launch (No Installation Required)
+
+1. Download the repository by clicking the green **Code** button and selecting **Download ZIP**.
+2. Extract the ZIP file to a folder of your choice.
+3. Launch the app:
+   - **Windows:** Double-click `run.bat`
+   - **macOS / Linux:** Open a terminal in the folder and run `bash run.sh`
+
+> Note: On your first launch, Clarity will automatically configure Python, download necessary media components (FFmpeg), and detect your graphics card. Once ready, the studio opens automatically in your browser or desktop window. On subsequent launches, the studio opens in seconds.
+
+---
+
+## Core Features
+
+Clarity provides four dedicated video tools in one unified studio:
+
+| Tool | What It Does | Recommended Use |
 | :--- | :--- | :--- |
-| 🔍 **Upscale** | Enhances video clarity (**1x, 2x, 3x, or 4x**) up to crisp 4K while removing blur, compression artifacts, and noise (1x retains the original resolution while supersampling and denoising). | Anime, animations, retro cartoons, and vintage clips. |
-| ⏳ **Slow-Motion** | Generates brand-new AI intermediate frames to create ultra-smooth **2x, 4x, or 8x** slow-motion. | Action shots, sports replays, smooth motion clips. |
-| 🎞️ **Interpolate** | Replaces duplicate/choppy frames with newly synthesized motion (**2x, 4x, or 8x** fps multiplier). | Smoothing 24fps anime to silky 48fps or 60fps+ fluid playback. |
-| 🎭 **Easy Mask** | 1-click subject extraction and background separation. Outputs a **green-screen composite**, an **alpha matte**, and optional **transparent video**. | Background replacement, VFX compositing, rotoscoping subjects. |
+| **Upscale** | Increases video resolution (**1x, 2x, 3x, or 4x**) up to 4K while sharpening details and removing noise and blur. (1x mode cleans and sharpens without changing original dimensions). | Animated content, older videos, web clips, and compressed footage. |
+| **Slow-Motion** | Generates new frames between existing ones to create smooth slow-motion (**2x, 4x, or 8x** slower). | Action shots, sports highlights, and cinematic b-roll. |
+| **Interpolate** | Replaces duplicate or choppy frames with synthesized fluid motion (**2x, 4x, or 8x** frame rate). | Converting 24 FPS animation to fluid 48 FPS or 60+ FPS motion. |
+| **Easy Mask** | Automatically isolates a person or object across an entire video clip. Generates a green screen version, a black-and-white alpha matte, or a transparent video. | Background replacement, video editing, and visual effects. |
 
 ---
 
-## 🖥️ How to Use the Web Studio
+## How to Use the Studio
 
-![Clarity Web Studio Interface](src/video_upscaler/web/Screenshot%202026-08-26%20193733.png)
+![Clarity Studio Interface](src/video_upscaler/web/Screenshot%202026-08-26%20193733.png)
 
 1. **Add Your Videos**:
-   - Simply drag and drop video files (`.mp4`, `.mkv`, `.mov`, `.avi`, `.webm`, etc.) onto the left panel or player area.
-   - You can also paste videos directly into the `input/` folder.
-2. **Choose Your AI Action**:
-   - Click **Upscale**, **Slow-motion**, **Interpolate**, or **Easy Mask** in the top navigation bar.
-   - Choose your scale or speed multiplier (`1x`, `2x`, `3x`, `4x`, `8x`).
-   - Pick a model card that suits your video (e.g. *Balanced* for everyday videos, *Deep* for noisy clips).
-3. **Compare & Inspect**:
-   - Preview original and enhanced videos side-by-side.
-   - Use the **1-Window / 2-Window** toggle button to switch viewing modes.
-   - Scroll your mouse wheel to zoom in (up to 1000%) and drag to pan across fine details.
-   - Use the synchronized timeline scrubber and frame-by-frame step buttons to inspect individual frames.
+   - Drag and drop video files (`.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`) into the file panel on the left.
+   - You can also place files directly inside the `input/` folder in the Clarity directory.
+
+2. **Choose a Tool and Settings**:
+   - Select **Upscale**, **Slow-motion**, **Interpolate**, or **Easy Mask** from the top menu.
+   - Choose your scale multiplier or speed factor.
+   - Select a model preset:
+     - *Balanced*: Best for general everyday videos.
+     - *Clean*: Preserves original film grain and subtle textures.
+     - *Deep Denoise*: Ideal for heavily compressed, blurry, or low-quality clips.
+     - *Faithful*: Mild enhancement focused on preserving artistic style.
+
+3. **Compare Results Side-by-Side**:
+   - Preview original and processed clips side-by-side or in a single synced view.
+   - Zoom in up to 1000% using your mouse wheel and drag to inspect fine details.
+   - Scrub the synchronized timeline or use the step buttons to compare specific frames.
+
 4. **Batch Processing (Multiple Videos)**:
-   - Select multiple videos just like in Windows File Explorer: hold **Ctrl + Click** to select individual files, or **Shift + Click** to select a range.
-   - Click the **Render Queue** button at the bottom left to inspect queued jobs.
-5. **Hit Render**:
-   - Click **Render Video**. A live progress bar will show the render stage, percent, elapsed time, and ETA.
-   - When finished, your output video is saved as an `.mp4` file in the `output/` folder and loaded into the player for instant review! (Transparent Easy Mask exports remain `.mov` with ProRes 4444).
-6. **Recent Activity & Saved Paths**:
-   - Click the **Bell (🔔)** icon in the top header to view recent jobs.
-   - Displays the status (completed, failed, cancelled), elapsed time, error reasons, and full output file paths with one-click copy buttons.
-   - Automatically stores the most recent 20 jobs in `activity.json` inside your app data directory so history persists across app restarts.
-7. **Reset App Anytime**:
-   - Click the **Reset App** button at the top right to instantly purge GPU VRAM caches and restore the studio to its pristine initial state.
+   - Select multiple files from the input list using **Ctrl + Click** or **Shift + Click**.
+   - Open the **Render Queue** panel at the bottom left to view all queued tasks.
+
+5. **Render and Save**:
+   - Click **Render Video**. A live progress bar shows progress percentage, elapsed time, and estimated time remaining.
+   - Completed videos are saved in the `output/` folder and can be opened or played immediately.
+
+6. **Recent Activity**:
+   - Click the **Bell icon** in the upper header to view recent jobs, completion times, and direct file path links.
 
 ---
 
-## 🎭 Easy Mask: Subject & Background Separation
+## Easy Mask: Subject and Background Separation
 
-Easy Mask is Clarity's AI-powered video matting tool — mark a person or object on the first frame, and Easy Mask tracks and segments it cleanly through the entire clip. 
+Easy Mask allows you to isolate a moving person or object from a video without manual frame-by-frame rotoscoping:
 
-The workspace features a **4-window stage**:
-1. **Input Video**: Original footage with timeline synchronization.
-2. **Target Mask**: First-frame interactive painter and auto-detector.
-3. **Green Screen Result**: Subject composited over pure chroma green (`#00FF00`).
-4. **Alpha Matte Result**: High-contrast black & white luminance transparency mask.
-
-### How to use Easy Mask:
-1. Open the **Easy Mask** tab and select a video from your list.
+1. Open the **Easy Mask** tab and select a video.
 2. Click **Select Target on Frame 1**.
-3. Choose **Auto-Detect** (✨) and click directly on the subject (powered by Segment Anything). You can also use **Add** (+) or **Erase** (-) brush tools to paint or touch up edges.
-4. Customize outputs: choose whether to generate **Green Screen**, **Alpha Matte**, or **Transparent ProRes 4444 video**.
-5. Click **Render Easy Mask** at the bottom. When finished, all preview viewports update with the keyed results!
+3. Use **Auto-Detect** to click on the subject you want to isolate, or use the **Add** (+) and **Erase** (-) brush tools to paint or adjust the selection.
+4. Select your preferred output formats:
+   - **Green Screen**: Subject placed over a pure green chroma background.
+   - **Alpha Matte**: High-contrast black-and-white mask for video editors.
+   - **Transparent Video**: Transparent video file (ProRes 4444 `.mov`) ready for drag-and-drop into editing software like Premiere, DaVinci Resolve, or Final Cut.
+5. Click **Render Easy Mask** to process the entire clip.
 
 ---
 
-## 🧩 AI Models Explained (In Plain English)
+## Hardware Support
 
-### 1. Upscale Models (Real-CUGAN)
-- **Balanced (Recommended)**: The best everyday setting. Sharpens details while cleaning up standard compression artifacts.
-- **Clean**: Upscales purely without altering fine textures or film grain.
-- **Deep Denoise**: Strong AI cleaning for heavily compressed, blurry, or low-bitrate web videos.
-- **Faithful**: Gentle enhancement designed to preserve original artistic styles.
+Clarity runs on virtually any modern computer and automatically selects the fastest acceleration available:
 
-### 2. Slow-Motion Models (AMT)
-- **AMT-S (Fast & Crisp)**: Lightweight, fast, and great for general slow-motion video.
-- **AMT-L (High Quality)**: Deeper AI analysis for complex, fast-moving scenes.
-- **AMT-G (Maximum Smoothness)**: Flagship model with the highest motion detail.
-
-### 3. Interpolation Models (Anime Dedup)
-- **GMFSS (Fortuna)**: Industry-standard anime frame interpolation. Ideal for 2D animation with duplicate frame cadences.
-- **RIFE (Practical-RIFE)**: High-speed real-time interpolation with great motion flow.
-
-### 4. Matting & Segmentation Models (Easy Mask)
-- **Easy Mask (MatAnyone2)**: State-of-the-art video object matting. Accurately tracks transparent hair, edges, and motion blur through entire video clips.
-- **SAM (Segment Anything)**: High-precision point-and-click subject detection on frame 1.
+- **NVIDIA GeForce / RTX GPUs**: Runs with dedicated TensorRT acceleration and CUDA for maximum performance. Older GTX cards and modern RTX 50-series cards are supported automatically.
+- **Apple Silicon (M1, M2, M3, M4)**: Accelerated using Apple Metal (MPS).
+- **AMD & Intel GPUs**: Supported via Vulkan (ncnn).
+- **CPU Mode**: Runs on standard processors if a dedicated graphics card is not present (processing will take longer).
 
 ---
 
-## ⚡ Hardware Acceleration
+## Command Line Interface (Advanced)
 
-Clarity automatically detects your computer's hardware and selects the fastest acceleration available:
-
-- **NVIDIA GeForce / RTX GPUs**: Runs with dedicated **TensorRT (FP16)** CUDA streams for maximum GPU throughput.
-- **Apple Silicon Macs (M1/M2/M3/M4)**: Fully accelerated with Apple **Metal (MPS)**.
-- **Intel & AMD GPUs**: Supported via **Vulkan (ncnn)**.
-- **CPU**: Works on any computer even without a dedicated graphics card (processing will take longer).
-
----
-
-## 💻 Optional: Interactive Terminal Mode (CLI)
-
-Prefer using the command line? Clarity includes a full keyboard-driven terminal interface:
+For users who prefer working from a terminal, Clarity also includes an interactive keyboard-driven command-line interface:
 
 ```bash
 uv run main.py --cli
 ```
 
-- Navigate menus with the **Arrow Keys**, press **Space** to toggle, and **Enter** to confirm.
+- Navigate options with arrow keys and press Enter to select.
 - Run automated benchmarks with `uv run main.py benchmark`.
 
 ---
 
-## ❓ Frequently Asked Questions & Troubleshooting
+## Frequently Asked Questions
 
 <details>
 <summary><b>Where are my converted videos saved?</b></summary>
 
-By default, all rendered videos are placed in the `output/` folder inside the Clarity directory. You can also click the folder path under **Output Destination** in the Web UI to pick any custom export folder on your computer.
+All completed videos are saved in the `output/` folder inside the Clarity directory by default. You can change this destination anytime by clicking the folder path under **Output Destination** in the studio.
 </details>
 
 <details>
-<summary><b>Do I need an internet connection while rendering?</b></summary>
+<summary><b>Do I need an active internet connection to use Clarity?</b></summary>
 
-Only the first time you use a specific AI model (Clarity will automatically download and verify the model weights). Once downloaded, Clarity runs 100% offline on your machine.
+An internet connection is only needed once when an AI model is used for the very first time so Clarity can download the model weights. After that, Clarity runs completely offline.
 </details>
 
 <details>
-<summary><b>How do I re-run setup or repair packages?</b></summary>
+<summary><b>How do updates work?</b></summary>
 
-- **Windows:** Run `run.bat --setup` in command prompt.
-- **Mac / Linux:** Run `bash run.sh --setup`.
+If you installed Clarity using the desktop installer, the app will periodically check for updates. When an update is available, you will receive an in-app notification. You can review the update notes and install it with a single click, keeping your downloaded models and settings intact.
 </details>
 
 <details>
-<summary><b>How do I delete or clear videos?</b></summary>
+<summary><b>How do I repair or re-configure my installation?</b></summary>
 
-- Click the **3 dots (`...`)** next to any video in the Input or Output list to **Rename** or **Delete** it.
-- Click the **Clear Videos** button at the bottom of the list to remove all videos in that folder at once.
-</details>
-
-<details>
-<summary><b>How do desktop updates work?</b></summary>
-
-Clarity desktop builds automatically check for updates from [GitHub Releases](https://github.com/Rik-rut/Clarity/releases). When a new version is published, you will receive a notification and an update card in the Recent Activity panel. Updates always ask before installing, and upgrading preserves your existing models, settings, and activity history.
-
-> 💡 *Note: The first updater-enabled build must be downloaded and installed manually; subsequent releases will notify you directly inside the app.*
-</details>
-
-<details>
-<summary><b>Why is my video taking a long time?</b></summary>
-
-Higher multipliers (`4x` upscale, `8x` slowmo) and larger videos (like 4K) require more computation. If you do not have an NVIDIA GPU or Apple Silicon chip, your computer will process frames using the CPU, which is slower. For the fastest speeds, use `2x` on the *Balanced* or *AMT-S* profile.
+- On Windows, run `run.bat --setup`.
+- On macOS or Linux, run `bash run.sh --setup`.
 </details>
 
 ---
 
-## 📜 License & Acknowledgements
+## License and Acknowledgements
 
 - **Clarity Core Application**: Released under the [MIT License](LICENSE).
-- **AI Models & Engines**: Third-party models carry their respective licenses (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+- **AI Models and Components**: Third-party models are subject to their respective licenses (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
   - [Real-CUGAN](https://github.com/bilibili/ailab/tree/main/Real-CUGAN) by bilibili AI Lab.
   - [AMT](https://github.com/mcg-nku/amt) by MCG-NKU (Non-Commercial use).
   - [GMFSS / MultiPassDedup / RIFE](https://github.com/AlexWortega/MultiPassDedup).

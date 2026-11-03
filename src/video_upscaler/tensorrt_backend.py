@@ -100,7 +100,7 @@ def _torch_lib_dir() -> Path | None:
         import torch
 
         return Path(torch.__file__).resolve().parent / "lib"
-    except ImportError:
+    except (ImportError, AttributeError):
         return None
 
 

@@ -71,6 +71,7 @@ class SetupState:
     updated_at: str = field(default_factory=_now)
     torch_variant: str = ""
     gpu_names: List[str] = field(default_factory=list)
+    compute_capabilities: List[str] = field(default_factory=list)
     models_tier: str = ""
     tensorrt: bool = False
     backend: str = ""
@@ -118,6 +119,7 @@ class SetupState:
             "updated_at": self.updated_at,
             "torch_variant": self.torch_variant,
             "gpu_names": list(self.gpu_names),
+            "compute_capabilities": list(self.compute_capabilities),
             "models_tier": self.models_tier,
             "tensorrt": self.tensorrt,
             "backend": self.backend,
@@ -135,6 +137,8 @@ class SetupState:
         state.torch_variant = str(payload.get("torch_variant", ""))
         gpu_names = payload.get("gpu_names") or []
         state.gpu_names = [str(n) for n in gpu_names] if isinstance(gpu_names, list) else []
+        compute_caps = payload.get("compute_capabilities") or []
+        state.compute_capabilities = [str(c) for c in compute_caps] if isinstance(compute_caps, list) else []
         state.models_tier = str(payload.get("models_tier", ""))
         state.tensorrt = bool(payload.get("tensorrt", False))
         state.backend = str(payload.get("backend", "") or "")
@@ -218,3 +222,8 @@ def is_setup_complete(data_dir: Path) -> bool:
 def write_marker(data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     marker_file(data_dir).write_text("1", encoding="utf-8")
+
+
+def remove_marker(data_dir: Path) -> None:
+    """Remove the .setup_complete marker if present."""
+    marker_file(data_dir).unlink(missing_ok=True)

@@ -32,10 +32,11 @@ class BackendSelection:
 
 def _cuda_available() -> bool:
     try:
-        import torch
+        from video_upscaler.backend import cuda_usable
+
+        return cuda_usable()
     except ImportError:  # pragma: no cover - torch is a core dep
         return False
-    return bool(torch.cuda.is_available())
 
 
 class MattingSession(Protocol):

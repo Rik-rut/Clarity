@@ -165,6 +165,29 @@ def _step(
     setup_state.save_state(context.data_dir, state)
 
 
+def _provision_ncnn_vulkan(context: SetupContext, tracker: ProgressTracker) -> None:
+    """Download realcugan-ncnn-vulkan for Vulkan GPU acceleration on AMD/Intel."""
+    tracker.line("Non-NVIDIA hardware detected; staging realcugan-ncnn-vulkan for Vulkan acceleration…")
+    try:
+        from video_upscaler import ncnn
+        if not ncnn.check_ncnn("realcugan"):
+            ncnn.download_ncnn("realcugan")
+            tracker.line("Staged realcugan-ncnn-vulkan successfully.")
+    except Exception as exc:
+        tracker.line(f"Warning: Could not stage realcugan-ncnn-vulkan ({exc}); CPU fallback will be used.")
+
+
+def _step_runtime(
+    context: SetupContext,
+    state: setup_state.SetupState,
+    tracker: ProgressTracker,
+    reinstall_torch: bool = False,
+) -> None:
+    runtime.install_runtime(context, tracker, state, reinstall_torch=reinstall_torch)
+    if state.torch_variant == "cpu":
+        _provision_ncnn_vulkan(context, tracker)
+
+
 def run_steps(
     context: SetupContext,
     state: setup_state.SetupState,
@@ -174,16 +197,44 @@ def run_steps(
     if args.force:
         state.reset_from(STEPS[0])
 
+    info = detect_gpu()
+    hardware_changed = False
+    if state.torch_variant:
+        if state.torch_variant != info.torch_variant:
+            hardware_changed = True
+        elif state.gpu_names != info.names:
+            hardware_changed = True
+        elif info.compute_capabilities and state.compute_capabilities != info.compute_capabilities:
+            hardware_changed = True
+
+    if hardware_changed:
+        tracker.line(
+            f"Hardware change detected: was {state.gpu_names} ({state.torch_variant}), "
+            f"now {info.names} ({info.torch_variant}). Reprovisioning runtime."
+        )
+        state.steps["gpu"] = setup_state.PENDING
+        state.steps["runtime"] = setup_state.PENDING
+        state.steps["verify"] = setup_state.PENDING
+        state.steps["complete"] = setup_state.PENDING
+        state.completed_at = ""
+        setup_state.remove_marker(context.data_dir)
+
     if not state.is_done("gpu"):
         _step(context, state, tracker, "gpu", lambda: _step_gpu(state, args))
     if not state.is_done("runtime"):
         _step(
-            context, state, tracker, "runtime",
-            lambda: runtime.install_runtime(context, tracker, state),
+            context,
+            state,
+            tracker,
+            "runtime",
+            lambda: _step_runtime(context, state, tracker, reinstall_torch=hardware_changed),
         )
     if not state.is_done("models"):
         _step(
-            context, state, tracker, "models",
+            context,
+            state,
+            tracker,
+            "models",
             lambda: model_steps.install_models(context, tracker, args.tier),
         )
     if not state.is_done("verify"):
@@ -197,6 +248,7 @@ def _step_gpu(state: setup_state.SetupState, args: argparse.Namespace) -> None:
     info = detect_gpu()
     state.torch_variant = info.torch_variant
     state.gpu_names = list(info.names)
+    state.compute_capabilities = list(info.compute_capabilities)
     state.tensorrt = args.tensorrt == "yes" or (args.tensorrt == "auto" and info.has_nvidia)
     if info.error:
         print(f"PROGRESS 0|gpu|{info.error}", flush=True)

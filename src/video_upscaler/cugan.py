@@ -67,6 +67,8 @@ def detect_device() -> str:
     """Return the processing device ("cuda", "mps", or "cpu") without loading a model."""
     import torch
 
+    from video_upscaler.backend import cuda_usable
+
     preferred = PREFERRED_DEVICE
     if preferred == "cuda":
         return "cuda"
@@ -74,7 +76,7 @@ def detect_device() -> str:
         return "mps"
     if preferred == "cpu":
         return "cpu"
-    if torch.cuda.is_available():
+    if cuda_usable():
         return "cuda"
     if _mps_available(torch):
         return "mps"
@@ -100,7 +102,9 @@ class RealCUGANEngine:
 
         import torch
 
-        if PREFERRED_DEVICE == "cuda" and not torch.cuda.is_available():
+        from video_upscaler.backend import cuda_usable
+
+        if PREFERRED_DEVICE == "cuda" and not cuda_usable():
             raise RuntimeError(
                 "CUDA was requested via CLARITY_DEVICE but is not available "
                 "on this system."

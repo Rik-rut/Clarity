@@ -22,7 +22,19 @@ if not %errorlevel%==0 set "DO_SETUP=1"
 
 if not exist ".venv\Scripts\python.exe" set "DO_SETUP=1"
 
-if "%DO_SETUP%"=="0" goto launch
+REM If environment exists and setup was not explicitly requested, check hardware parity
+if "%DO_SETUP%"=="0" (
+    .venv\Scripts\python.exe -m video_upscaler.desktop.gpu --check-venv .venv >nul 2>nul
+    if not errorlevel 1 goto launch
+    echo Hardware change or environment sync needed. Auto-repairing runtime...
+    uv run python -m video_upscaler.desktop.gpu --sync-venv .venv
+    if errorlevel 1 (
+        echo Auto-repair failed. Running full setup assistant...
+        set "DO_SETUP=1"
+    ) else (
+        goto launch
+    )
+)
 
 REM ==========================================
 REM            CLARITY SETUP ASSISTANT
@@ -61,6 +73,10 @@ echo.
 echo [2/5] Installing libraries (first time only - this downloads a few GB)...
 uv sync --all-extras
 if errorlevel 1 goto fail
+
+echo.
+echo Aligning PyTorch build with your GPU architecture...
+uv run python -m video_upscaler.desktop.gpu --sync-venv .venv
 
 REM ---- [3/5] FFmpeg -------------------------------------------------------
 echo.
@@ -124,11 +140,11 @@ echo       3 Skip           (Clarity will ask when it first needs one)
 choice /C 123 /N /M "      Choose [1], [2] or [3]"
 if errorlevel 3 goto done_setup
 if errorlevel 2 (
-    uv run --all-extras main.py --download-models all
+    uv run --no-sync main.py --download-models all
     goto done_setup
 )
 if errorlevel 1 (
-    uv run --all-extras main.py --download-models essential
+    uv run --no-sync main.py --download-models essential
     goto done_setup
 )
 
@@ -158,8 +174,21 @@ if "%~1"=="setup" (
     exit /b 0
 )
 
-uv run --all-extras main.py %*
+uv run --no-sync main.py %*
+if errorlevel 1 (
+    .venv\Scripts\python.exe -m video_upscaler.desktop.gpu --check-venv .venv >nul 2>nul
+    if not errorlevel 1 goto done_launch
+    echo.
+    echo Hardware or CUDA environment mismatch detected after exit.
+    echo Attempting self-healing repair...
+    uv run python -m video_upscaler.desktop.gpu --sync-venv .venv
+    if not errorlevel 1 (
+        echo Environment repaired. Re-launching Clarity...
+        uv run --no-sync main.py %*
+    )
+)
 
+:done_launch
 echo.
 echo Clarity closed.
 pause

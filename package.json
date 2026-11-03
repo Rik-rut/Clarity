@@ -1,12 +1,14 @@
 {
   "name": "clarity-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "scripts": {
     "tauri": "tauri",
     "desktop:prepare": "powershell -ExecutionPolicy Bypass -File ./tools/prepare_desktop.ps1",
     "desktop:dev": "npm run desktop:prepare && tauri dev",
-    "desktop:build": "npm run desktop:prepare && tauri build"
+    "desktop:build": "npm run desktop:prepare && tauri build",
+    "desktop:sign": "node tools/sign_bundle.js",
+    "desktop:manifest": "powershell -ExecutionPolicy Bypass -File ./tools/make_update_manifest.ps1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
