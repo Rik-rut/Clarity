@@ -6,6 +6,11 @@ hub-relative path, destination, byte size, and sha256. Files are fetched
 from a single Hugging Face repo (``Rikrut/clarity``, ``CLARITY_MODELS``
 folder) so end users never chase scattered release pages.
 
+For an https source the backends run in order: ``aria2c`` (multi-connection,
+resumable), then ``huggingface_hub`` (Xet), then plain ``urllib``. A file is
+installed only after its size and sha256 match the manifest, whichever backend
+fetched it. ``CLARITY_DOWNLOADER`` forces a single backend for troubleshooting.
+
 ``CLARITY_MODEL_HUB_BASE`` overrides the source. It may be an https base
 URL or a local directory (or ``file://`` URL), which enables offline
 installs from the staged ``CLARITY_MODELS/`` folder.
@@ -27,7 +32,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Optional
 from urllib.parse import unquote, urlparse
 
-from video_upscaler import config
+from video_upscaler import aria2, config
 
 DEFAULT_HUB_REPO = "Rikrut/clarity"
 DEFAULT_HUB_BASE = (
@@ -42,6 +47,16 @@ _CHUNK = 1 << 20  # 1 MiB
 # Xet (huggingface_hub's accelerated transport) parallelises chunks and pays
 # off on the big weights. Small files are faster over one plain connection.
 HF_MIN_BYTES = 16 << 20
+
+# Download backends for an https source, in the order ``auto`` tries them.
+# aria2 leads: the spike measured 23.3 MB/s against Xet's 14.0 MB/s and the
+# plain single connection's 1.7 MB/s (spike-results.md).
+DOWNLOADERS = ("auto", "aria2", "hf", "http")
+PART_SUFFIX = ".part"
+ARIA2_CONTROL_SUFFIX = ".aria2"
+ARIA2_REQUEST_SUFFIX = ".aria2-req"
+
+_noticed: set[str] = set()
 
 
 class HubError(RuntimeError):
@@ -198,6 +213,74 @@ def _should_use_hf(entry: dict[str, Any]) -> bool:
     return True
 
 
+def _notice(message: str) -> None:
+    """Print a one-off notice; backends are resolved per file, so don't repeat."""
+    if message not in _noticed:
+        _noticed.add(message)
+        print(message)
+
+
+def downloader_choice() -> str:
+    """The backend forced by ``CLARITY_DOWNLOADER``, or ``auto``.
+
+    An unrecognised value is ignored with a warning.
+    """
+    value = os.environ.get("CLARITY_DOWNLOADER", "").strip().lower()
+    if not value:
+        return "auto"
+    if value not in DOWNLOADERS:
+        _notice(
+            f"Unrecognised CLARITY_DOWNLOADER={value!r}; expected "
+            f"{'|'.join(DOWNLOADERS)}. Using the automatic order."
+        )
+        return "auto"
+    return value
+
+
+def download_backends(entry: dict[str, Any]) -> list[str]:
+    """Ordered backends to try for one entry.
+
+    ``auto`` is aria2 (when installed) -> Xet (when it applies) -> plain HTTP.
+    A forced backend that is not available prints a notice and degrades to
+    ``auto``. A local hub never reaches this: it copies instead.
+    """
+    auto: list[str] = []
+    if aria2.find_aria2c() is not None:
+        auto.append("aria2")
+    if _should_use_hf(entry):
+        auto.append("hf")
+    auto.append("http")
+
+    choice = downloader_choice()
+    if choice == "auto":
+        return auto
+    if choice == "aria2":
+        if "aria2" in auto:
+            return ["aria2", *auto[1:]]
+        _notice(
+            "CLARITY_DOWNLOADER=aria2 but aria2c is not installed; "
+            "using the automatic order."
+        )
+        return auto
+    if choice == "hf":
+        if "hf" in auto:
+            return ["hf", "http"]
+        _notice(
+            "CLARITY_DOWNLOADER=hf but the Hugging Face path is unavailable for "
+            "this file; using the automatic order."
+        )
+        return auto
+    return ["http"]
+
+
+def _aria2_side_files(temp_path: Path) -> tuple[Path, Path]:
+    """aria2's control file (resume) and its temporary request file."""
+    return (
+        temp_path.with_name(temp_path.name + ARIA2_CONTROL_SUFFIX),
+        temp_path.with_name(temp_path.name + ARIA2_REQUEST_SUFFIX),
+    )
+
+
 def _progress_tqdm(progress_cb: Optional[Callable[[int, Optional[int]], None]]):
     """Build a tqdm subclass that forwards chunk progress to ``progress_cb``."""
     from tqdm.auto import tqdm
@@ -282,6 +365,53 @@ def _print_progress(label: str, done: int, total: int) -> None:
     print(f"\r{message:<70}", end="", flush=True)
 
 
+def _stage_download(
+    entry: dict[str, Any],
+    temp_path: Path,
+    staging_dir: Path,
+    label: str,
+    expected_size: int,
+    progress_cb: Optional[Callable[[int, Optional[int]], None]],
+    aria2_used: list[bool],
+) -> None:
+    """Fetch one entry into ``temp_path``, trying each backend in order.
+
+    ``aria2_used`` is appended to as soon as aria2 runs, so the caller still
+    knows a partial file may be worth resuming when this raises.
+
+    Raises ``HubError`` only when every applicable backend failed.
+    """
+    url = _entry_source_url(_entry_base(entry), entry["path"])
+    for backend in download_backends(entry):
+        if backend == "aria2":
+            aria2_used.append(True)
+            try:
+                aria2.run_download(url, temp_path, label, expected_size, progress_cb)
+                return
+            except aria2.Aria2Error as exc:
+                print(f"Accelerated download unavailable ({exc}); trying another method…")
+        elif backend == "hf":
+            staged = _try_download_hf(entry, staging_dir, progress_cb)
+            if staged is not None:
+                os.replace(staged, temp_path)
+                return
+        else:
+            try:
+                _download_http(url, temp_path, label, expected_size, progress_cb)
+            except (urllib.error.URLError, OSError) as exc:
+                raise HubError(
+                    f"Failed to download {entry['path']}:\n{exc}\n\n"
+                    f"Check your network connection, or set CLARITY_MODEL_HUB_BASE\n"
+                    f"to a mirror/local folder containing the models."
+                ) from exc
+            return
+    raise HubError(
+        f"Failed to download {entry['path']}: no download method succeeded.\n"
+        "Set CLARITY_MODEL_HUB_BASE to a mirror/local folder containing the models, "
+        "or retry."
+    )
+
+
 def install_entry(
     entry: dict[str, Any],
     quiet_existing: bool = False,
@@ -307,9 +437,12 @@ def install_entry(
 
     base = hub_base()
     local_dir = _local_base_dir(base)
-    temp_path = dest.with_name(dest.name + ".part")
+    temp_path = dest.with_name(dest.name + PART_SUFFIX)
     staging_dir = dest.with_name(dest.name + ".staging")
 
+    verified = False
+    verification_failed = False
+    aria2_used: list[bool] = []
     try:
         if local_dir is not None:
             source = local_dir / PurePosixPath(entry["path"])
@@ -321,42 +454,33 @@ def install_entry(
                 total = int(entry["size"])
                 progress_cb(total, total)
         else:
-            staged = (
-                _try_download_hf(entry, staging_dir, progress_cb)
-                if _should_use_hf(entry)
-                else None
+            _stage_download(
+                entry, temp_path, staging_dir, label, int(entry["size"]), progress_cb, aria2_used
             )
-            if staged is not None:
-                os.replace(staged, temp_path)
-            else:
-                url = _entry_source_url(_entry_base(entry), entry["path"])
-                try:
-                    _download_http(
-                        url, temp_path, label, int(entry["size"]), progress_cb
-                    )
-                except (urllib.error.URLError, OSError) as exc:
-                    raise HubError(
-                        f"Failed to download {entry['path']}:\n{exc}\n\n"
-                        f"Check your network connection, or set CLARITY_MODEL_HUB_BASE\n"
-                        f"to a mirror/local folder containing the models."
-                    ) from exc
 
         actual_size = temp_path.stat().st_size
         if actual_size != int(entry["size"]):
-            temp_path.unlink(missing_ok=True)
+            verification_failed = True
             raise HubError(
                 f"Downloaded {dest.name} has wrong size "
                 f"({_format_mb(actual_size)} != {_format_mb(int(entry['size']))})."
             )
         if not _verify_hash(temp_path, entry["sha256"]):
-            temp_path.unlink(missing_ok=True)
+            verification_failed = True
             raise HubError(
                 f"Downloaded {dest.name} failed its integrity check (sha256).\n"
                 "Please retry; if it keeps failing the hub copy may be corrupt."
             )
+        verified = True
         os.replace(temp_path, dest)
     finally:
-        temp_path.unlink(missing_ok=True)
+        # aria2 keeps its partial file + control file so a retry resumes; a
+        # corrupt or unused partial is removed. hf/http cleanup is unchanged.
+        control, request = _aria2_side_files(temp_path)
+        if verified or verification_failed or not aria2_used:
+            temp_path.unlink(missing_ok=True)
+            control.unlink(missing_ok=True)
+        request.unlink(missing_ok=True)
         shutil.rmtree(staging_dir, ignore_errors=True)
 
     print(f"Installed: {dest}")

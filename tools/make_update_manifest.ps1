@@ -95,7 +95,8 @@ if (-not [string]::IsNullOrWhiteSpace($outParent) -and -not (Test-Path $outParen
 }
 
 $jsonText = $manifest | ConvertTo-Json -Depth 5
-[System.IO.File]::WriteAllText($OutFile, $jsonText, [System.Text.Encoding]::UTF8)
+# UTF-8 without BOM: the updater parses latest.json with serde_json, which rejects a leading BOM.
+[System.IO.File]::WriteAllText($OutFile, $jsonText, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host "Successfully generated updater manifest: $OutFile"
 Write-Host "Asset download URL: $assetUrl"

@@ -1,15 +1,19 @@
 <#
 .SYNOPSIS
-    Prepares desktop runtime assets (uv.exe, ffmpeg.exe, ffprobe.exe, and app icons)
-    for Clarity desktop packaging with Tauri v2.
+    Prepares desktop runtime assets (uv.exe, ffmpeg.exe, ffprobe.exe, aria2c.exe,
+    and app icons) for Clarity desktop packaging with Tauri v2.
 
 .DESCRIPTION
     Ensures standalone binaries and desktop icons are properly placed in:
     - src-tauri/resources/uv.exe
     - src-tauri/resources/ffmpeg.exe
     - src-tauri/resources/ffprobe.exe
+    - src-tauri/resources/aria2c.exe
     - src-tauri/icons/ (icon.ico, 32x32.png, 128x128.png, 128x128@2x.png, icon.png)
     - src-tauri/shell/logo.png
+
+    aria2c is the accelerated model-download backend (multi-connection with
+    resume). Its release is pinned by version and sha256.
 
     The script is idempotent. It skips downloads if working binaries and icons are
     already present, unless -Force is specified. It checks local caches before
@@ -137,6 +141,20 @@ function Extract-ArchiveFile {
     return $true
 }
 
+function Test-FileSha256 {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [Parameter(Mandatory=$true)][string]$Expected
+    )
+    if (-not (Test-Path $FilePath)) { return $false }
+    try {
+        $actual = (Get-FileHash -Path $FilePath -Algorithm SHA256).Hash
+        return ($actual -eq $Expected)
+    } catch {
+        return $false
+    }
+}
+
 # Ensure target directories exist
 if (-not (Test-Path $ResourcesDir)) {
     New-Item -ItemType Directory -Path $ResourcesDir -Force | Out-Null
@@ -212,7 +230,7 @@ if ($uvValid -and -not $Force) {
 # -------------------------------------------------------------
 # 2. ffmpeg.exe and ffprobe.exe setup
 # -------------------------------------------------------------
-Write-Host "`n[2/4] Checking ffmpeg.exe & ffprobe.exe..." -ForegroundColor White
+Write-Host "`n[2/5] Checking ffmpeg.exe & ffprobe.exe..." -ForegroundColor White
 $ffmpegTarget = Join-Path $ResourcesDir "ffmpeg.exe"
 $ffprobeTarget = Join-Path $ResourcesDir "ffprobe.exe"
 
@@ -287,9 +305,73 @@ if ($ffmpegValid -and -not $Force) {
 }
 
 # -------------------------------------------------------------
+# 3. aria2c.exe setup (accelerated model downloads)
+# -------------------------------------------------------------
+Write-Host "`n[3/5] Checking aria2c.exe..." -ForegroundColor White
+$aria2Target = Join-Path $ResourcesDir "aria2c.exe"
+$aria2Version = "1.37.0"
+$aria2ZipSha256 = "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
+$aria2Url = "https://github.com/aria2/aria2/releases/download/release-$aria2Version/aria2-$aria2Version-win-64bit-build1.zip"
+$aria2Valid = Test-BinaryExecutable -FilePath $aria2Target -Argument "--version" -MinSizeBytes 524288
+
+if ($aria2Valid -and -not $Force) {
+    $aria2Ver = (& "$aria2Target" --version)[0].Trim()
+    Write-Success "aria2c.exe already verified at $aria2Target ($aria2Ver)"
+} else {
+    $aria2Acquired = $false
+
+    if (-not $ForceDownload) {
+        $localAria2Candidates = @(
+            "$env:USERPROFILE\scoop\apps\aria2\current\aria2c.exe",
+            ((Get-Command aria2c.exe -ErrorAction SilentlyContinue).Source)
+        ) | Where-Object { $_ -and (Test-Path $_) }
+
+        foreach ($cand in $localAria2Candidates) {
+            if (Test-BinaryExecutable -FilePath $cand -Argument "--version" -MinSizeBytes 524288) {
+                Write-Info "Found verified local aria2c.exe at $cand. Copying to resources..."
+                Copy-Item -Path $cand -Destination $aria2Target -Force
+                $aria2Acquired = $true
+                break
+            }
+        }
+    }
+
+    if (-not $aria2Acquired) {
+        Write-Info "Downloading aria2 v$aria2Version release for x86_64 Windows..."
+        $tempZip = Join-Path ([System.IO.Path]::GetTempPath()) ("aria2_desktop_" + [System.Guid]::NewGuid().ToString("N") + ".zip")
+        $tempExtract = Join-Path ([System.IO.Path]::GetTempPath()) ("aria2_extract_" + [System.Guid]::NewGuid().ToString("N"))
+        try {
+            $dlOk = Download-ArchiveFile -Url $aria2Url -DestinationPath $tempZip
+            if (-not $dlOk) {
+                throw "Failed to download aria2 release from $aria2Url"
+            }
+            if (-not (Test-FileSha256 -FilePath $tempZip -Expected $aria2ZipSha256)) {
+                $actual = (Get-FileHash -Path $tempZip -Algorithm SHA256).Hash
+                throw "aria2 release sha256 mismatch: expected $aria2ZipSha256, got $actual"
+            }
+            Extract-ArchiveFile -ArchivePath $tempZip -ExtractDir $tempExtract
+            $extractedAria2 = Get-ChildItem -Path $tempExtract -Filter "aria2c.exe" -Recurse | Select-Object -First 1
+            if (-not $extractedAria2) {
+                throw "aria2c.exe not found in downloaded archive."
+            }
+            Copy-Item -Path $extractedAria2.FullName -Destination $aria2Target -Force
+        } finally {
+            if (Test-Path $tempZip) { Remove-Item $tempZip -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    if (-not (Test-BinaryExecutable -FilePath $aria2Target -Argument "--version" -MinSizeBytes 524288)) {
+        throw "Verification failed for $aria2Target after installation."
+    }
+    $aria2Ver = (& "$aria2Target" --version)[0].Trim()
+    Write-Success "aria2c.exe successfully configured: $aria2Ver"
+}
+
+# -------------------------------------------------------------
 # 3. Application Icons Setup
 # -------------------------------------------------------------
-Write-Host "`n[3/4] Checking application icons in src-tauri/icons/..." -ForegroundColor White
+Write-Host "`n[4/5] Checking application icons in src-tauri/icons/..." -ForegroundColor White
 $icoTarget = Join-Path $IconsDir "icon.ico"
 $png32Target = Join-Path $IconsDir "32x32.png"
 $png128Target = Join-Path $IconsDir "128x128.png"
@@ -443,7 +525,7 @@ print("ICONS_OK")
 # -------------------------------------------------------------
 # 4. Stage Application Package for Desktop Installer
 # -------------------------------------------------------------
-Write-Host "`n[4/4] Staging Python application package into resources..." -ForegroundColor White
+Write-Host "`n[5/5] Staging Python application package into resources..." -ForegroundColor White
 
 Copy-Item -Path (Join-Path $RepoRoot "pyproject.toml") -Destination (Join-Path $ResourcesDir "pyproject.toml") -Force
 Copy-Item -Path (Join-Path $RepoRoot "README.md") -Destination (Join-Path $ResourcesDir "README.md") -Force
@@ -469,6 +551,8 @@ Write-Host "  ffmpeg binary: $ffmpegTarget" -ForegroundColor Gray
 Write-Host "  ffmpeg ver:    $(((& "$ffmpegTarget" -version)[0]).Trim())" -ForegroundColor Green
 Write-Host "  ffprobe bin:   $ffprobeTarget" -ForegroundColor Gray
 Write-Host "  ffprobe ver:   $(((& "$ffprobeTarget" -version)[0]).Trim())" -ForegroundColor Green
+Write-Host "  aria2c bin:    $aria2Target" -ForegroundColor Gray
+Write-Host "  aria2c ver:    $((& "$aria2Target" --version)[0].Trim())" -ForegroundColor Green
 Write-Host "  icons dir:     $IconsDir" -ForegroundColor Gray
 Get-ChildItem -Path $IconsDir | ForEach-Object {
     Write-Host ("    - " + $_.Name + " (" + $_.Length + " bytes)") -ForegroundColor Gray

@@ -1,6 +1,6 @@
 [project]
 name = "clarity"
-version = "0.1.1"
+version = "0.1.2"
 description = "Interactive CLI video upscaler powered by Real-CUGAN"
 readme = "README.md"
 authors = [
@@ -77,6 +77,15 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.12.4,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+# Only the test suite is collected (scratch/ holds ad-hoc scripts).
+# Time-based benchmarks are opt-in: `uv run pytest -m slow`.
+testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: wall-clock benchmarks (simulated install speed); excluded by default",
+]
 
 # The distribution name is "clarity" (brand) but the import package is
 # video_upscaler — declare the module so uv_build finds src/video_upscaler/.

@@ -22,6 +22,12 @@ function Test-Condition([bool]$Ok, [string]$What) {
     else { Write-Host "  FAIL  $What"; $script:failures += $What }
 }
 
+# Warn-only: the app works without it, so a miss is reported but never fails.
+function Test-Warn([bool]$Ok, [string]$What) {
+    if ($Ok) { Write-Host "  ok    $What" }
+    else { Write-Host "  warn  $What" -ForegroundColor Yellow }
+}
+
 $required = @('python', 'env', 'models', 'logs', 'input', 'output')
 $marker   = Join-Path $InstallDir '.setup_complete'
 $venvPy   = Join-Path $InstallDir 'env\Scripts\python.exe'
@@ -41,6 +47,10 @@ if ($Uninstalled) {
     Test-Condition (Test-Path $marker) 'marker written'
     Test-Condition (Test-Path $venvPy) 'venv interpreter present'
     Test-Condition (@(Get-ChildItem (Join-Path $InstallDir 'models') -File).Count -gt 0) 'models downloaded'
+
+    # aria2c is the accelerated download backend. It is optional: modelhub falls
+    # back to huggingface_hub and plain HTTP without it.
+    Test-Warn (Test-Path (Join-Path $InstallDir 'resources\aria2c.exe')) 'aria2c bundled (accelerated model downloads)'
 
     # The whole point: nothing provisioned anywhere else.
     Test-Condition (-not (Test-Path (Join-Path $drive 'Clarity-data'))) 'no <drive>\Clarity-data sibling'

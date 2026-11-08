@@ -32,6 +32,13 @@ Var TensorrtChoice
     Goto clarity_hook_done
   clarity_have_uv:
 
+  ; aria2c is the accelerated model-download backend. It is optional: modelhub
+  ; falls back to huggingface_hub and plain HTTP when it is absent, so a missing
+  ; copy is a warning, never a failed install.
+  IfFileExists "$INSTDIR\resources\aria2c.exe" clarity_have_aria2 0
+    DetailPrint "[WARN] resources\aria2c.exe is missing; model downloads will use the fallback methods."
+  clarity_have_aria2:
+
   ; ---- 1/4 Python runtime ---------------------------------------------------
   DetailPrint "[1/4] Installing the Python 3.11 runtime into $DataDir\python ..."
   System::Call 'kernel32::SetEnvironmentVariable(t "UV_PYTHON_INSTALL_DIR", t "$DataDir\python")'
