@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Clarity Video AI",
-        version="0.1.2",
+        version="0.1.3",
         description="Web-based graphical interface for Clarity video upscaling and interpolation.",
         lifespan=lifespan,
     )

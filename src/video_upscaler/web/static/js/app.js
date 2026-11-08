@@ -2573,14 +2573,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // from the backend origin. So plugin calls go through the raw IPC command
   // names, and are permitted for loopback pages by
   // src-tauri/capabilities/local-backend.json.
-  function tauriInvoke() {
+  // Dual-mode: called with a command it runs the IPC call and returns its
+  // promise; called with no arguments it returns the bound invoker for
+  // callers that want to fire several commands.
+  function tauriInvoke(cmd, args) {
     const tauri = typeof window !== 'undefined' ? window.__TAURI__ : null;
     if (!tauri) return null;
-    if (tauri.core && typeof tauri.core.invoke === 'function') {
-      return tauri.core.invoke.bind(tauri.core);
-    }
-    if (typeof tauri.invoke === 'function') return tauri.invoke.bind(tauri);
-    return null;
+    const invoker = tauri.core && typeof tauri.core.invoke === 'function'
+      ? tauri.core.invoke.bind(tauri.core)
+      : (typeof tauri.invoke === 'function' ? tauri.invoke.bind(tauri) : null);
+    if (!invoker) return null;
+    return cmd ? invoker(cmd, args) : invoker;
   }
 
   function sendWebNotification(title, body) {
@@ -3065,6 +3068,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Test hook: drives the real update-available pathway (state, toast, activity
+  // banner) without a real release existing upstream. `rid` mirrors the updater
+  // plugin's numeric resource id (u32), which download_and_install requires.
+  function simulateUpdate(version, notes) {
+    const update = {
+      rid: Date.now() % 4294967296,
+      version: version,
+      currentVersion: null,
+      date: new Date().toISOString(),
+      body: notes || '',
+    };
+    state.pendingUpdate = update;
+    sendDesktopNotification('Clarity — Update Available', `Version ${update.version} is available! Open Recent Activity to install.`);
+    fetchActivity();
+    showToast(`Update available: v${update.version}`, 'info');
+    return update;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.__simulateUpdate = simulateUpdate;
+  }
+
   async function installUpdate() {
     try {
       const resp = await fetch('/api/jobs/status');
@@ -3078,9 +3103,22 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       // Proceed if endpoint unreachable
     }
+    const pending = state.pendingUpdate;
+    if (!pending || !pending.rid) {
+      showToast('No pending update found to install.', 'error');
+      return;
+    }
     showToast('Downloading and installing update...', 'info');
     try {
-      await tauriInvoke('plugin:updater|download_and_install');
+      // Tauri v2's updater command takes a resource id plus an event channel.
+      const tauri = typeof window !== 'undefined' ? window.__TAURI__ : null;
+      const onEvent = tauri && tauri.core && typeof tauri.core.Channel === 'function'
+        ? new tauri.core.Channel()
+        : undefined;
+      await tauriInvoke('plugin:updater|download_and_install', {
+        rid: pending.rid,
+        onEvent,
+      });
     } catch (err) {
       showToast(`Update installation failed: ${err.message || err}`, 'error');
     }

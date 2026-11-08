@@ -33,7 +33,7 @@ describe('Desktop IPC & Notification Bridge (app.js) Unit Tests', () => {
   }
 
   const BRIDGE_HEADERS = [
-    'function tauriInvoke()',
+    'function tauriInvoke(cmd, args)',
     'function sendWebNotification(title, body)',
     'async function initDesktopBridge()',
     'function sendDesktopNotification(title, body)'
@@ -693,83 +693,254 @@ describe('Desktop Auto Update UI & Bridge', () => {
   test('app.js defines update functions and check update button', () => {
     assert.ok(appJs.includes('async function checkForUpdates('));
     assert.ok(appJs.includes('async function installUpdate('));
+    assert.ok(appJs.includes('function simulateUpdate('));
+    assert.ok(appJs.includes('window.__simulateUpdate = simulateUpdate;'));
     assert.ok(appJs.includes("btnCheckUpdates: document.getElementById('btn-check-updates')"));
   });
 
-  test('checkForUpdates respects desktop guard and handles found/none/error cases', async () => {
-    let notified = [];
-    let toasts = [];
-    let ipcCommands = [];
+  // Same extraction strategy as the suites above: app.js internals live two
+  // spaces deep, each function ending at the first line that is exactly '  }'.
+  // Tests exercise the REAL tauriInvoke/bridge from app.js; only the
+  // environment (Tauri IPC, fetch, DOM) is faked.
+  function extractFn(header) {
+    const start = appJs.indexOf(header);
+    assert.notStrictEqual(start, -1, 'app.js must define ' + header);
+    const end = appJs.indexOf('\n  }', start);
+    assert.notStrictEqual(end, -1, 'unterminated ' + header);
+    return appJs.slice(start, end + 4);
+  }
 
-    const mockState = { pendingUpdate: null, activeJob: null };
-    const mockShowToast = (msg, type) => { toasts.push({ msg, type }); };
-    const mockSendNotification = (title, body) => { notified.push({ title, body }); };
-    const mockFetchActivity = () => {};
-
-    // 1. Non-desktop environment: silent on auto, toasts on manual
-    let mockWindow = {};
-    const checkFnNonDesktop = new Function(
-      'window', 'state', 'showToast', 'sendDesktopNotification', 'fetchActivity', 'elems',
-      `
-      ${appJs.slice(appJs.indexOf('async function checkForUpdates('), appJs.indexOf('\n  }', appJs.indexOf('async function checkForUpdates(')) + 4)}
-      return checkForUpdates;
-      `
-    )(mockWindow, mockState, mockShowToast, mockSendNotification, mockFetchActivity, {});
-
-    await checkFnNonDesktop(false);
-    assert.strictEqual(toasts.length, 0, 'auto check outside desktop must be completely silent');
-    await checkFnNonDesktop(true);
-    assert.ok(toasts.some((t) => t.msg.includes('only available in the desktop app')));
-
-    // 2. Desktop environment with update available
-    toasts = [];
-    mockWindow = {
-      __TAURI__: {
-        core: {
-          invoke: async (cmd) => {
-            ipcCommands.push(cmd);
-            if (cmd === 'plugin:updater|check') {
-              return { version: '0.2.0', body: 'New features!' };
-            }
-            return null;
-          }
-        }
-      }
+  function makeElement(tag) {
+    const classes = [];
+    const el = {
+      tag,
+      children: [],
+      listeners: {},
+      textContent: '',
+      title: '',
+      type: '',
+      classList: {
+        add: (c) => { if (!classes.includes(c)) classes.push(c); },
+        remove: (c) => { const i = classes.indexOf(c); if (i >= 0) classes.splice(i, 1); },
+        contains: (c) => classes.includes(c),
+      },
+      get className() { return classes.join(' '); },
+      set className(v) {
+        classes.length = 0;
+        classes.push(...String(v).split(/\s+/).filter(Boolean));
+      },
+      get innerHTML() { return ''; },
+      set innerHTML(v) { if (v === '') el.children.length = 0; },
+      appendChild(child) { el.children.push(child); return child; },
+      addEventListener(type, handler) { el.listeners[type] = handler; },
+      contains() { return false; },
     };
-    const tauriInvoke = (cmd, args) => mockWindow.__TAURI__.core.invoke(cmd, args);
+    return el;
+  }
 
-    const checkFnDesktop = new Function(
-      'window', 'state', 'showToast', 'sendDesktopNotification', 'fetchActivity', 'elems', 'tauriInvoke',
-      `
-      ${appJs.slice(appJs.indexOf('async function checkForUpdates('), appJs.indexOf('\n  }', appJs.indexOf('async function checkForUpdates(')) + 4)}
-      return checkForUpdates;
-      `
-    )(mockWindow, mockState, mockShowToast, mockSendNotification, mockFetchActivity, {}, tauriInvoke);
+  const DEFAULT_METADATA = {
+    rid: 4271,
+    version: '0.2.0',
+    currentVersion: '0.1.2',
+    date: '2026-11-08T00:00:00Z',
+    body: 'Faster setup',
+  };
 
-    await checkFnDesktop(false);
-    assert.strictEqual(mockState.pendingUpdate.version, '0.2.0');
-    assert.ok(notified.some((n) => n.title.includes('Update Available')));
-    assert.ok(ipcCommands.includes('plugin:updater|check'));
+  function loadBridge(options) {
+    options = options || {};
+    const state = { pendingUpdate: null, activeJob: null };
+    const elems = {
+      activityBadge: makeElement('span'),
+      activityList: makeElement('div'),
+      activityPanel: makeElement('div'),
+    };
+    elems.activityPanel.classList.add('hidden');
+
+    const ipc = [];
+    const toasts = [];
+    const fetchCalls = [];
+    const channels = [];
+    const metadata = options.metadata === undefined ? DEFAULT_METADATA : options.metadata;
+
+    function TauriChannel() {
+      this.id = 'channel-' + channels.length;
+      channels.push(this);
+    }
+
+    const win = options.noTauri
+      ? {}
+      : {
+          __TAURI__: {
+            core: {
+              invoke: (cmd, args) => {
+                ipc.push({ cmd, args });
+                if (options.checkError) return Promise.reject(new Error('updater endpoint unreachable'));
+                if (cmd === 'plugin:updater|check') return Promise.resolve(metadata);
+                return Promise.resolve();
+              },
+              Channel: TauriChannel,
+            },
+          },
+        };
+
+    const fetchMock = async (url) => {
+      fetchCalls.push(url);
+      if (url === '/api/jobs/status') {
+        return { ok: true, json: async () => ({ active: options.activeJob === true }) };
+      }
+      if (url === '/api/activity/seen') return { ok: true, json: async () => ({ ok: true }) };
+      return { ok: true, json: async () => ({ unread: options.unread || 0, entries: options.entries || [] }) };
+    };
+
+    const bridgeSource = [
+      extractFn('function tauriInvoke(cmd, args)'),
+      extractFn('function sendWebNotification(title, body)'),
+      extractFn('function sendDesktopNotification(title, body)'),
+      extractFn('function formatRelativeTime('),
+      extractFn('function renderActivityList('),
+      extractFn('async function fetchActivity('),
+      extractFn('async function markActivitySeen('),
+      extractFn('async function checkForUpdates('),
+      extractFn('function simulateUpdate('),
+      extractFn('async function installUpdate('),
+    ].join('\n\n');
+
+    const api = new Function(
+      'window',
+      'Notification',
+      'state',
+      'elems',
+      'fetch',
+      'document',
+      'showToast',
+      bridgeSource + '\nreturn { tauriInvoke, sendDesktopNotification, checkForUpdates, installUpdate, simulateUpdate, fetchActivity, renderActivityList };'
+    )(win, options.Notification, state, elems, fetchMock, { createElement: (tag) => makeElement(tag) },
+      (msg, kind) => toasts.push({ msg, kind }));
+
+    // app.js fires fetchActivity() without awaiting it; drain those promises.
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+    return { api, state, elems, ipc, toasts, fetchCalls, channels, settle, TauriChannel };
+  }
+
+  test('checkForUpdates runs the updater command through the real IPC bridge', async () => {
+    const h = loadBridge();
+    await h.api.checkForUpdates(false);
+
+    assert.ok(h.ipc.some((c) => c.cmd === 'plugin:updater|check'), 'must call plugin:updater|check');
+    assert.strictEqual(h.state.pendingUpdate.version, '0.2.0', 'metadata must land in state.pendingUpdate');
+    assert.strictEqual(h.state.pendingUpdate.rid, 4271);
+
+    const notice = h.ipc.find((c) => c.cmd === 'plugin:notification|notify');
+    assert.ok(notice, 'an available update must dispatch a desktop notification');
+    assert.ok(notice.args.options.title.includes('Update Available'));
+    assert.ok(notice.args.options.body.includes('0.2.0'));
+    assert.strictEqual(h.toasts.length, 0, 'automatic checks must stay silent');
+
+    await h.settle();
+    assert.strictEqual(h.elems.activityBadge.textContent, '1', 'pending update alone counts as one unread');
   });
 
-  test('installUpdate refuses while render job is running', async () => {
-    let installed = false;
-    let toasts = [];
-    const mockState = { activeJob: { job_id: 'j1' } };
-    const mockShowToast = (msg, type) => { toasts.push({ msg, type }); };
-    const mockFetch = async () => ({ ok: true, json: async () => ({ active: true }) });
-    const tauriInvoke = async () => { installed = true; };
+  test('checkForUpdates is silent off-desktop and tells manual checks', async () => {
+    const h = loadBridge({ noTauri: true });
+    await h.api.checkForUpdates(false);
+    assert.strictEqual(h.toasts.length, 0, 'auto check outside desktop must be completely silent');
+    await h.api.checkForUpdates(true);
+    assert.ok(h.toasts.some((t) => t.msg.includes('only available in the desktop app')));
+    assert.strictEqual(h.ipc.length, 0);
+  });
 
-    const installFn = new Function(
-      'state', 'showToast', 'fetch', 'tauriInvoke',
-      `
-      ${appJs.slice(appJs.indexOf('async function installUpdate('), appJs.indexOf('\n  }', appJs.indexOf('async function installUpdate(')) + 4)}
-      return installUpdate;
-      `
-    )(mockState, mockShowToast, mockFetch, tauriInvoke);
+  test('no newer release clears state and informs a manual check', async () => {
+    const h = loadBridge({ metadata: null });
+    await h.api.checkForUpdates(false);
+    assert.strictEqual(h.state.pendingUpdate, null);
+    assert.strictEqual(h.toasts.length, 0);
+    await h.api.checkForUpdates(true);
+    assert.ok(h.toasts.some((t) => t.msg.includes('up to date')));
+    assert.ok(h.ipc.some((c) => c.cmd === 'plugin:updater|check'));
+  });
 
-    await installFn();
-    assert.strictEqual(installed, false, 'must not install when job is active');
-    assert.ok(toasts.some((t) => t.msg.includes('Please wait for the current render job')));
+  test('updater errors stay quiet on auto checks and surface on manual', async () => {
+    const h = loadBridge({ checkError: true });
+    await h.api.checkForUpdates(false);
+    assert.strictEqual(h.toasts.length, 0, 'a failed automatic check must not interrupt the user');
+    await h.api.checkForUpdates(true);
+    const err = h.toasts.find((t) => t.kind === 'error');
+    assert.ok(err && err.msg.includes('Failed to check for updates'), 'manual check must report the failure');
+  });
+
+  test('installUpdate passes the resource id and event channel', async () => {
+    const h = loadBridge();
+    await h.api.checkForUpdates(false);
+    await h.api.installUpdate();
+
+    const call = h.ipc.find((c) => c.cmd === 'plugin:updater|download_and_install');
+    assert.ok(call, 'must call plugin:updater|download_and_install');
+    assert.strictEqual(call.args.rid, 4271, 'Tauri v2 requires the numeric resource id');
+    assert.ok(call.args.onEvent instanceof h.TauriChannel, 'must pass a core Channel for download events');
+    assert.strictEqual(h.channels.length, 1, 'exactly one event channel per install');
+  });
+
+  test('installUpdate refuses while a render job is running', async () => {
+    const h = loadBridge({ activeJob: true });
+    await h.api.checkForUpdates(false);
+    assert.strictEqual(h.state.pendingUpdate.version, '0.2.0');
+
+    await h.api.installUpdate();
+    assert.strictEqual(h.ipc.some((c) => c.cmd === 'plugin:updater|download_and_install'), false,
+      'must not install while a job is active');
+    assert.ok(h.toasts.some((t) => t.msg.includes('Please wait for the current render job')));
+  });
+
+  test('installUpdate refuses without a pending resource id', async () => {
+    const h = loadBridge();
+    await h.api.installUpdate();
+    assert.strictEqual(h.ipc.some((c) => c.cmd === 'plugin:updater|download_and_install'), false);
+    assert.ok(h.toasts.some((t) => t.msg.includes('No pending update found to install.')));
+  });
+
+  test('a simulated update drives notification, badge and activity banner offline', async () => {
+    const h = loadBridge({ unread: 2 });
+    const simulated = h.api.simulateUpdate('0.2.0', 'Faster setup');
+
+    assert.strictEqual(simulated.version, '0.2.0');
+    assert.strictEqual(typeof simulated.rid, 'number', 'rid must be the updater numeric resource id');
+    assert.strictEqual(h.state.pendingUpdate.body, 'Faster setup');
+
+    const notice = h.ipc.find((c) => c.cmd === 'plugin:notification|notify');
+    assert.ok(notice, 'simulation must dispatch the desktop notification');
+    assert.ok(notice.args.options.title.includes('Update Available'));
+    assert.ok(h.toasts.some((t) => t.msg === 'Update available: v0.2.0'));
+
+    await h.api.fetchActivity();
+    assert.strictEqual(h.elems.activityBadge.textContent, '3', 'badge = unread entries + pending update');
+    assert.strictEqual(h.elems.activityBadge.classList.contains('hidden'), false);
+
+    const banner = h.elems.activityList.children.find((el) => el.className.includes('activity-update-banner'));
+    assert.ok(banner, 'the update card must render in Recent Activity');
+    assert.strictEqual(banner.children[0].children[0].textContent, '✨ Update Available: v0.2.0');
+    assert.ok(banner.children.some((el) => el.textContent === 'Faster setup'), 'release notes must show');
+
+    const actions = banner.children.find((el) => el.className.includes('activity-update-actions'));
+    assert.ok(actions.children.some((el) => el.textContent === 'Install & Restart'));
+    assert.ok(actions.children.some((el) => el.textContent === 'Later'));
+
+    assert.ok(h.fetchCalls.every((u) => u === '/api/activity'),
+      'simulation must only touch the stubbed local activity endpoint');
+    assert.ok(h.fetchCalls.length >= 1);
+
+    const installBtn = actions.children.find((el) => el.textContent === 'Install & Restart');
+    await installBtn.listeners.click({ stopPropagation: () => {} });
+    await h.settle();
+    const call = h.ipc.find((c) => c.cmd === 'plugin:updater|download_and_install');
+    assert.ok(call, 'the banner button must start the install');
+    assert.strictEqual(call.args.rid, simulated.rid);
+
+    const laterBtn = actions.children.find((el) => el.textContent === 'Later');
+    await laterBtn.listeners.click({ stopPropagation: () => {} });
+    await h.api.fetchActivity();
+    assert.strictEqual(h.state.pendingUpdate, null, 'Later clears the pending update');
+    assert.strictEqual(h.elems.activityBadge.textContent, '2', 'dismissed update drops out of the badge');
+    assert.strictEqual(h.elems.activityList.children.find((el) => el.className.includes('activity-update-banner')), undefined);
   });
 });

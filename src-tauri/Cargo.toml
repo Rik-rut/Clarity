@@ -1,6 +1,6 @@
 [package]
 name = "clarity-desktop"
-version = "0.1.2"
+version = "0.1.3"
 description = "Clarity AI Video Upscaler & Interpolation Studio"
 edition = "2021"
 

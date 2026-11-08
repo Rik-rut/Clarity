@@ -1,6 +1,6 @@
 [project]
 name = "clarity"
-version = "0.1.2"
+version = "0.1.3"
 description = "Interactive CLI video upscaler powered by Real-CUGAN"
 readme = "README.md"
 authors = [
